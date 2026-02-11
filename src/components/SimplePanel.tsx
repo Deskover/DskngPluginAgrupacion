@@ -1,16 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelProps } from '@grafana/data';
+import { getTemplateSrv } from '@grafana/runtime';
 import { SimpleOptions } from 'types';
 import { css } from '@emotion/css';
 
 import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
 
+const PLUGIN_ID = "dsknggrafana-deskoverplugin-panel";
+
 type ChartConfig = {
   key: string;
   title: string;
-  height: number;
-  option: echarts.EChartsOption;
+  height?: number;
+  option?: echarts.EChartsOption;
+  endpoint?: ChartEndpoint;
+  code?: string;
 };
 
 type AccordionConfig = {
@@ -20,7 +25,25 @@ type AccordionConfig = {
   charts: ChartConfig[];
 };
 
-type CategoryKey = "abstencionismo" | "votoduro";
+type CategoryConfig = {
+  key: string;
+  title: string;
+  sections: AccordionConfig[];
+};
+
+type PanelConfig = {
+  categories: CategoryConfig[];
+};
+
+type ChartEndpoint = {
+  refId?: string;
+  url?: string;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: unknown;
+  useProxy?: boolean;
+  proxyPath?: string;
+};
 
 const chartsConfigAbstencionismo: AccordionConfig[] = [
   {
@@ -206,6 +229,21 @@ const chartsConfigVotoDuro: AccordionConfig[] = chartsConfigAbstencionismo.reduc
   []
 );
 
+const defaultPanelConfig: PanelConfig = {
+  categories: [
+    {
+      key: "abstencionismo",
+      title: "Abstencionismo",
+      sections: chartsConfigAbstencionismo,
+    },
+    {
+      key: "votoduro",
+      title: "Voto duro",
+      sections: chartsConfigVotoDuro,
+    },
+  ],
+};
+
 const getVarCalculo = (): string => {
   if (typeof window === "undefined") return "abstencionismo";
   const params = new URLSearchParams(window.location.search);
@@ -214,35 +252,152 @@ const getVarCalculo = (): string => {
 
 const normalizeCalculo = (value: string) => value.trim().toLowerCase();
 
-const getGroupCategory = (groupKey: string): CategoryKey =>
-  groupKey.startsWith("vd_") ? "votoduro" : "abstencionismo";
+type ParsedConfig = { config: PanelConfig | null; error: string | null };
+
+const normalizeEndpoint = (raw?: any): ChartEndpoint | undefined => {
+  if (!raw) return undefined;
+  if (typeof raw === "string") {
+    return { refId: raw };
+  }
+  const refId = raw.refId ?? raw.query ?? raw.queryRefId ?? raw.consulta ?? raw.letra ?? raw.id;
+  const url = raw.url ?? raw.endpoint ?? raw.puntoFinal ?? raw.ruta;
+  const useProxyRaw = raw.useProxy ?? raw.usarProxy ?? raw.proxy;
+  const useProxy =
+    typeof useProxyRaw === "string" ? useProxyRaw.toLowerCase() === "true" : Boolean(useProxyRaw);
+  const proxyPath = raw.proxyPath ?? raw.rutaProxy ?? raw.proxyId ?? raw.proxyPathId;
+  if (!refId && !url) return undefined;
+  return {
+    refId,
+    url,
+    method: raw.method ?? raw.metodo,
+    headers: raw.headers ?? raw.encabezados,
+    body: raw.body ?? raw.cuerpo,
+    useProxy,
+    proxyPath,
+  };
+};
+
+const normalizeChart = (raw: any): ChartConfig => {
+  return {
+    key: raw.key ?? raw.clave ?? "",
+    title: raw.title ?? raw.titulo ?? "",
+    height: raw.height ?? raw.altura,
+    option: raw.option ?? raw.opcion,
+    endpoint: normalizeEndpoint(raw.endpoint ?? raw.puntoFinal ?? raw.endpointConfig ?? raw.conexion ?? raw.refId),
+    code: raw.code ?? raw.codigo ?? raw.funcion,
+  };
+};
+
+const normalizeSection = (raw: any): AccordionConfig => {
+  const chartsRaw = raw.charts ?? raw.graficas ?? raw.graficos ?? [];
+  return {
+    key: raw.key ?? raw.clave ?? "",
+    title: raw.title ?? raw.titulo ?? "",
+    subtitle: raw.subtitle ?? raw.subtitulo,
+    charts: Array.isArray(chartsRaw) ? chartsRaw.map(normalizeChart) : [],
+  };
+};
+
+const normalizeCategory = (raw: any): CategoryConfig => {
+  const sectionsRaw = raw.sections ?? raw.secciones ?? [];
+  return {
+    key: raw.key ?? raw.clave ?? "",
+    title: raw.title ?? raw.titulo ?? "",
+    sections: Array.isArray(sectionsRaw) ? sectionsRaw.map(normalizeSection) : [],
+  };
+};
+
+const normalizeConfig = (parsed: any): PanelConfig | null => {
+  const categoriesRaw = Array.isArray(parsed)
+    ? parsed
+    : parsed?.categories ?? parsed?.categorias;
+  if (!Array.isArray(categoriesRaw)) return null;
+  return { categories: categoriesRaw.map(normalizeCategory) };
+};
+
+const replaceVars = (value: string, scopedVars?: Record<string, any>, format?: string) => {
+  return getTemplateSrv().replace(value, scopedVars, format);
+};
+
+const normalizeJsonValue = (value: any): any => {
+  if (Array.isArray(value)) {
+    const next = value.map((item) => normalizeJsonValue(item));
+    if (next.length === 1 && next[0] === "") {
+      return [];
+    }
+    return next;
+  }
+  if (value && typeof value === "object") {
+    const next: Record<string, any> = {};
+    Object.entries(value).forEach(([key, val]) => {
+      next[key] = normalizeJsonValue(val);
+    });
+    return next;
+  }
+  return value;
+};
+
+const deepReplace = (value: any, scopedVars?: Record<string, any>, format?: string): any => {
+  if (typeof value === "string") {
+    const replaced = replaceVars(value, scopedVars, format);
+    if (format === "json" && typeof replaced === "string") {
+      try {
+        return normalizeJsonValue(JSON.parse(replaced));
+      } catch {
+        return replaced;
+      }
+    }
+    return replaced;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => deepReplace(item, scopedVars, format));
+  }
+  if (value && typeof value === "object") {
+    const next: Record<string, any> = {};
+    Object.entries(value).forEach(([key, val]) => {
+      next[key] = deepReplace(val, scopedVars, format);
+    });
+    return next;
+  }
+  return value;
+};
+
+const parsePanelConfig = (raw?: string): ParsedConfig => {
+  if (!raw) return { config: null, error: null };
+  try {
+    const parsed = JSON.parse(raw);
+    const config = normalizeConfig(parsed);
+    if (!config) {
+      return { config: null, error: 'El JSON debe incluir "categories" o "categorias" como arreglo.' };
+    }
+    return { config, error: null };
+  } catch {
+    return { config: null, error: 'JSON invalido. Verifica comillas, comas y llaves.' };
+  }
+};
 
 export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fieldConfig, id }) => {
   const [calculo, setCalculo] = useState<string>(() => getVarCalculo());
-  const chartsConfig = useMemo<AccordionConfig[]>(() => {
-    const normalized = normalizeCalculo(calculo);
-    if (normalized === "votoduro") {
-      return [...chartsConfigVotoDuro, ...chartsConfigAbstencionismo];
-    }
-    return chartsConfigAbstencionismo;
-  }, [calculo]);
-  const chartsConfigAll = useMemo<AccordionConfig[]>(
-    () => [...chartsConfigVotoDuro, ...chartsConfigAbstencionismo],
-    []
-  );
-  const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("abstencionismo");
+  const panelConfig = useMemo<PanelConfig>(() => {
+    const parsed = parsePanelConfig(options?.configJson);
+    return parsed.config ?? defaultPanelConfig;
+  }, [options?.configJson]);
+  const configError = useMemo(() => parsePanelConfig(options?.configJson).error, [options?.configJson]);
+  const categories = panelConfig.categories ?? [];
+  const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [chartErrors, setChartErrors] = useState<Record<string, string>>({});
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
   const [activeCharts, setActiveCharts] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
-    chartsConfig.forEach((group) => {
-      initial[group.key] = group.charts[0]?.key ?? "";
-    });
     return initial;
   });
   const [hiddenCharts, setHiddenCharts] = useState<Record<string, Set<string>>>(() => ({}));
 
   const chartInstancesRef = useRef<Record<string, echarts.ECharts | null>>({});
   const domRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const optionCacheRef = useRef<Record<string, echarts.EChartsOption | null>>({});
+  const inFlightRef = useRef<Record<string, Promise<echarts.EChartsOption | null> | null>>({});
+  const errorCacheRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     return () => {
@@ -273,61 +428,50 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   }, []);
 
   useEffect(() => {
+    if (categories.length === 0) {
+      setSelectedCategory("");
+      return;
+    }
+    const normalized = normalizeCalculo(calculo);
+    const fromUrl = categories.find((category) => normalizeCalculo(category.key) === normalized);
+    const fallback = categories[0].key;
+    setSelectedCategory((prev) => {
+      if (prev && categories.some((category) => category.key === prev)) return prev;
+      return fromUrl?.key ?? fallback;
+    });
+  }, [calculo, categories]);
+
+  const sections = useMemo(() => {
+    const category = categories.find((item) => item.key === selectedCategory) ?? categories[0];
+    return category?.sections ?? [];
+  }, [categories, selectedCategory]);
+
+  useEffect(() => {
     Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
     chartInstancesRef.current = {};
     domRefs.current = {};
     const initialOpen = new Set<string>();
-    if (normalizeCalculo(calculo) === "votoduro") {
-      chartsConfigVotoDuro.forEach((group) => initialOpen.add(group.key));
-      setSelectedCategory("votoduro");
-    } else if (chartsConfig[0]?.key) {
-      initialOpen.add(chartsConfig[0].key);
-      setSelectedCategory("abstencionismo");
+    if (sections[0]?.key) {
+      initialOpen.add(sections[0].key);
     }
     setOpenKeys(initialOpen);
     const initial: Record<string, string> = {};
-    chartsConfig.forEach((group) => {
+    sections.forEach((group) => {
       initial[group.key] = group.charts[0]?.key ?? "";
     });
     setActiveCharts(initial);
     setHiddenCharts({});
-  }, [chartsConfig]);
-
-  const displayConfig = useMemo(
-    () => chartsConfigAll.filter((group) => getGroupCategory(group.key) === selectedCategory),
-    [chartsConfigAll, selectedCategory]
-  );
+  }, [sections]);
 
   useEffect(() => {
-    if (displayConfig.length === 0) {
-      setOpenKeys(new Set());
-      return;
-    }
+    optionCacheRef.current = {};
+    inFlightRef.current = {};
+  }, [panelConfig]);
 
-    setOpenKeys((prev) => {
-      const next = new Set<string>();
-      displayConfig.forEach((group) => {
-        if (prev.has(group.key)) {
-          next.add(group.key);
-        }
-      });
-      if (next.size === 0 && displayConfig[0]?.key) {
-        next.add(displayConfig[0].key);
-      }
-      return next;
-    });
-
-    setActiveCharts((prev) => {
-      const next = { ...prev };
-      displayConfig.forEach((group) => {
-        const current = next[group.key];
-        if (!current || !group.charts.some((c) => c.key === current)) {
-          next[group.key] = group.charts[0]?.key ?? "";
-        }
-      });
-      return next;
-    });
-  }, [displayConfig]);
+  useEffect(() => {
+    optionCacheRef.current = {};
+    inFlightRef.current = {};
+  }, [data?.request?.scopedVars]);
 
   const wrapperClass = useMemo(
     () => css`
@@ -341,24 +485,24 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     [width, height]
   );
 
-  const onToggleCategory = useCallback((category: CategoryKey) => {
+  const onToggleCategory = useCallback((category: string) => {
     setSelectedCategory(category);
   }, []);
 
   const ensureChart = useCallback(
-    (compositeKey: string, option: echarts.EChartsOption) => {
-      const el = domRefs.current[compositeKey];
+    (groupKey: string, option: echarts.EChartsOption) => {
+      const el = domRefs.current[groupKey];
       if (!el) return;
 
       const existingByDom = echarts.getInstanceByDom(el);
       const w = el.clientWidth;
       const h = el.clientHeight;
       if (w === 0 || h === 0) {
-        requestAnimationFrame(() => ensureChart(compositeKey, option));
+        requestAnimationFrame(() => ensureChart(groupKey, option));
         return;
       }
 
-      let chart = chartInstancesRef.current[compositeKey];
+      let chart = chartInstancesRef.current[groupKey];
       if (existingByDom) {
         Object.entries(chartInstancesRef.current).forEach(([key, value]) => {
           if (value === existingByDom) {
@@ -371,7 +515,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       }
       if (!chart || chart.isDisposed?.() || chart.getDom?.() !== el) {
         chart = echarts.init(el);
-        chartInstancesRef.current[compositeKey] = chart;
+        chartInstancesRef.current[groupKey] = chart;
       }
       chart.setOption(option as any, { notMerge: true, lazyUpdate: true });
       chart.resize();
@@ -379,22 +523,157 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     []
   );
 
+  const buildUrl = (endpoint: ChartEndpoint, scopedVars?: Record<string, any>) => {
+    const rawUrl = endpoint.url ? replaceVars(endpoint.url, scopedVars) : "";
+    if (!endpoint.useProxy) return rawUrl;
+    const proxyPath = endpoint.proxyPath ? replaceVars(endpoint.proxyPath, scopedVars) : "";
+    if (!proxyPath) {
+      throw new Error("Falta rutaProxy para usar el proxy.");
+    }
+    const base = `/api/plugin-proxy/${PLUGIN_ID}/${proxyPath}`;
+    if (!rawUrl) return base;
+    if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+      return rawUrl;
+    }
+    const baseClean = base.replace(/\/+$/, "");
+    const pathClean = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
+    return `${baseClean}${pathClean}`;
+  };
+
+  const fetchChartData = useCallback(async (endpoint?: ChartEndpoint) => {
+    if (!endpoint) return null;
+    const scopedVars = data?.request?.scopedVars;
+    if (endpoint.refId) {
+      const series = data?.series ?? [];
+      const matches = series.filter((frame) => frame.refId === endpoint.refId);
+      if (matches.length === 0) {
+        throw new Error(`No se encontro data para la consulta ${endpoint.refId}.`);
+      }
+      return matches.length === 1 ? matches[0] : matches;
+    }
+    if (!endpoint.url && !endpoint.useProxy) return null;
+
+    const resolvedUrl = buildUrl(endpoint, scopedVars);
+    const resolvedHeaders = endpoint.headers ? deepReplace(endpoint.headers, scopedVars) : undefined;
+    const resolvedBody = endpoint.body ? deepReplace(endpoint.body, scopedVars, "json") : undefined;
+    const method = (endpoint.method ?? "GET").toUpperCase() as "GET" | "POST";
+    const headers = resolvedHeaders ? { ...resolvedHeaders } : {};
+    const init: RequestInit = { method };
+    if (method === "POST") {
+      init.body = JSON.stringify(resolvedBody ?? {});
+      if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+        headers["Content-Type"] = "application/json";
+      }
+    }
+    if (Object.keys(headers).length > 0) {
+      init.headers = headers;
+    }
+    const response = await fetch(resolvedUrl, init);
+    if (!response.ok) {
+      throw new Error(`Error HTTP ${response.status} al consultar ${resolvedUrl}`);
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return response.json();
+    }
+    return response.text();
+  }, [data?.request?.scopedVars, data?.series]);
+
+  const buildOptionFromCode = useCallback((code: string, payload: unknown, vars: Record<string, unknown>) => {
+    try {
+      const fn = new Function("data", "echarts", "vars", code);
+      return fn(payload, echarts, vars);
+    } catch (error) {
+      console.error("Error ejecutando codigo de grafica", error);
+      return null;
+    }
+  }, []);
+
+  const getChartOption = useCallback(
+    async (groupKey: string, chart: ChartConfig) => {
+      const cacheKey = `${groupKey}::${chart.key}`;
+      const errorAt = errorCacheRef.current[cacheKey];
+      if (errorAt && Date.now() - errorAt < 5000) {
+        return null;
+      }
+      const cached = optionCacheRef.current[cacheKey];
+      if (cached) return cached;
+      const inflight = inFlightRef.current[cacheKey];
+      if (inflight) return inflight;
+
+      const promise = (async () => {
+        try {
+          let option = chart.option ?? null;
+          let payload: unknown = null;
+          if (chart.endpoint) {
+            payload = await fetchChartData(chart.endpoint);
+          }
+
+          if (chart.code) {
+            option = buildOptionFromCode(chart.code, payload, {
+              baseOption: chart.option ?? null,
+              scopedVars: data?.request?.scopedVars ?? {},
+              refId: chart.endpoint?.refId,
+            });
+            if (!option) {
+              throw new Error("La funcion de la grafica no retorno un option valido.");
+            }
+          } else if (!option && chart.endpoint) {
+            option = null;
+          }
+
+          if (option) {
+            optionCacheRef.current[cacheKey] = option;
+          }
+          setChartErrors((prev) => {
+            if (!prev[cacheKey]) return prev;
+            const next = { ...prev };
+            delete next[cacheKey];
+            return next;
+          });
+          return option;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Error al cargar la grafica";
+          setChartErrors((prev) => ({ ...prev, [cacheKey]: message }));
+          errorCacheRef.current[cacheKey] = Date.now();
+          return null;
+        }
+      })();
+
+      inFlightRef.current[cacheKey] = promise;
+      const result = await promise;
+      inFlightRef.current[cacheKey] = null;
+      return result;
+    },
+    [buildOptionFromCode, fetchChartData]
+  );
+
+  const renderChart = useCallback(
+    async (groupKey: string, chart: ChartConfig) => {
+      const option = await getChartOption(groupKey, chart);
+      if (!option) return;
+      ensureChart(groupKey, option);
+    },
+    [ensureChart, getChartOption]
+  );
+
   useEffect(() => {
-    if (displayConfig.length === 0) {
+    if (sections.length === 0) {
       return;
     }
 
-    displayConfig.forEach((group) => {
+    sections.forEach((group) => {
       if (!openKeys.has(group.key)) {
         return;
       }
       const activeKey = activeCharts[group.key] ?? group.charts[0]?.key;
       const activeChart = group.charts.find((c) => c.key === activeKey);
       if (!activeChart) return;
-      const compositeKey = `${group.key}::${activeChart.key}`;
-      requestAnimationFrame(() => ensureChart(compositeKey, activeChart.option));
+      requestAnimationFrame(() => {
+        renderChart(group.key, activeChart);
+      });
     });
-  }, [activeCharts, displayConfig, ensureChart, openKeys]);
+  }, [activeCharts, openKeys, renderChart, sections]);
 
   const onToggle = useCallback(
     (key: string, open: boolean) => {
@@ -409,28 +688,26 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       });
 
       if (open) {
-        const group = chartsConfig.find((c) => c.key === key);
+        const group = sections.find((c) => c.key === key);
         if (!group) return;
         const activeKey = activeCharts[key] ?? group.charts[0]?.key;
         const activeChart = group.charts.find((c) => c.key === activeKey);
         if (!activeChart) return;
-        const compositeKey = `${key}::${activeChart.key}`;
-        requestAnimationFrame(() => ensureChart(compositeKey, activeChart.option));
+        requestAnimationFrame(() => renderChart(key, activeChart));
       }
     },
-    [activeCharts, chartsConfig, ensureChart]
+    [activeCharts, renderChart, sections]
   );
 
   const onSwitchChart = useCallback(
     (groupKey: string, chartKey: string) => {
       setActiveCharts((prev) => ({ ...prev, [groupKey]: chartKey }));
-      const group = chartsConfig.find((c) => c.key === groupKey);
+      const group = sections.find((c) => c.key === groupKey);
       const activeChart = group?.charts.find((c) => c.key === chartKey);
       if (!activeChart) return;
-      const compositeKey = `${groupKey}::${activeChart.key}`;
-      requestAnimationFrame(() => ensureChart(compositeKey, activeChart.option));
+      requestAnimationFrame(() => renderChart(groupKey, activeChart));
     },
-    [chartsConfig, ensureChart]
+    [renderChart, sections]
   );
 
   const onRemoveChart = useCallback(
@@ -445,24 +722,24 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         if (prev[groupKey] !== chartKey) {
           return prev;
         }
-        const group = chartsConfig.find((c) => c.key === groupKey);
+        const group = sections.find((c) => c.key === groupKey);
         if (!group) return prev;
         const hidden = hiddenCharts[groupKey] ?? new Set<string>();
         const nextChart = group.charts.find((c) => c.key !== chartKey && !hidden.has(c.key));
         return { ...prev, [groupKey]: nextChart?.key ?? "" };
       });
     },
-    [chartsConfig, hiddenCharts]
+    [hiddenCharts, sections]
   );
 
   const makeChartRef = useCallback(
-    (compositeKey: string, option: echarts.EChartsOption) => (node: HTMLDivElement | null) => {
+    (groupKey: string, chart: ChartConfig) => (node: HTMLDivElement | null) => {
       if (node) {
-        domRefs.current[compositeKey] = node;
-        requestAnimationFrame(() => ensureChart(compositeKey, option));
+        domRefs.current[groupKey] = node;
+        requestAnimationFrame(() => renderChart(groupKey, chart));
       }
     },
-    [ensureChart]
+    [renderChart]
   );
 
   return (
@@ -483,14 +760,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         <span className={css`font-size: 12px; font-weight: 700; color: #1f2d3d;`}>
           Mostrar:
         </span>
-        {(["abstencionismo", "votoduro"] as CategoryKey[]).map((category) => {
-          const isActive = selectedCategory === category;
-          const label = category === "abstencionismo" ? "Abstencionismo" : "Voto duro";
+        {categories.map((category) => {
+          const isActive = selectedCategory === category.key;
           return (
             <button
-              key={category}
+              key={category.key}
               type="button"
-              onClick={() => onToggleCategory(category)}
+              onClick={() => onToggleCategory(category.key)}
               aria-pressed={isActive}
               className={css`
                 border: 1px solid ${isActive ? "#1f2d3d" : "rgba(31, 45, 61, 0.2)"};
@@ -503,35 +779,36 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                 cursor: pointer;
               `}
             >
-              {label}
+              {category.title}
             </button>
           );
         })}
       </div>
 
-      {displayConfig.length === 0 && (
+      {configError && (
         <div
           className={css`
-            padding: 16px;
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.9);
-            border: 1px dashed rgba(31, 45, 61, 0.25);
-            color: #1f2d3d;
+            margin-bottom: 12px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(180, 40, 40, 0.12);
+            border: 1px solid rgba(180, 40, 40, 0.35);
+            color: #c0392b;
             font-size: 12px;
-            text-align: center;
           `}
         >
-          Selecciona al menos una categoria para ver los accordiones.
+          {configError}
         </div>
       )}
 
-      {displayConfig.map((cfg) => {
+      {sections.map((cfg) => {
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
         const fallbackKey = visibleCharts[0]?.key ?? "";
         const activeKey = activeCharts[cfg.key] ?? fallbackKey;
         const activeChart = visibleCharts.find((c) => c.key === activeKey) ?? visibleCharts[0];
-        const compositeKey = `${cfg.key}::${activeChart?.key ?? ""}`;
+        const errorKey = activeChart ? `${cfg.key}::${activeChart.key}` : "";
+        const chartError = errorKey ? chartErrors[errorKey] : null;
         return (
         <details
           key={cfg.key}
@@ -631,8 +908,24 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             })}
           </div>
 
+          {chartError && (
+            <div
+              className={css`
+                margin: 8px 12px 0;
+                padding: 8px 10px;
+                border-radius: 8px;
+                background: rgba(180, 40, 40, 0.12);
+                border: 1px solid rgba(180, 40, 40, 0.35);
+                color: #c0392b;
+                font-size: 12px;
+              `}
+            >
+              {chartError}
+            </div>
+          )}
+
           <div
-            ref={activeChart ? makeChartRef(compositeKey, activeChart.option) : undefined}
+            ref={activeChart ? makeChartRef(cfg.key, activeChart) : undefined}
             style={{ width: "100%", height: activeChart?.height ?? 280 }}
             className={css`padding: 10px 12px 16px;`}
           />
