@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelProps } from '@grafana/data';
-import { getTemplateSrv } from '@grafana/runtime';
+import { getTemplateSrv, locationService } from '@grafana/runtime';
 import { SimpleOptions } from 'types';
 import { css } from '@emotion/css';
+import logoDeskover from '../img/logo.svg';
 
 import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
@@ -376,13 +377,33 @@ const parsePanelConfig = (raw?: string): ParsedConfig => {
   }
 };
 
+const parsePanelConfigUnknown = (raw: unknown): ParsedConfig => {
+  if (typeof raw === "string") {
+    return parsePanelConfig(raw);
+  }
+  const config = normalizeConfig(raw);
+  if (!config) {
+    return { config: null, error: 'El endpoint debe responder un JSON con "categories" o "categorias" (arreglo).' };
+  }
+  return { config, error: null };
+};
+
 export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fieldConfig, id }) => {
   const [calculo, setCalculo] = useState<string>(() => getVarCalculo());
+  const localParsedConfig = useMemo(() => parsePanelConfig(options?.configJson), [options?.configJson]);
+  const [remotePanelConfig, setRemotePanelConfig] = useState<PanelConfig | null>(null);
+  const [remoteConfigError, setRemoteConfigError] = useState<string | null>(null);
+  const [isRemoteConfigLoading, setIsRemoteConfigLoading] = useState(false);
+  const [loadingCharts, setLoadingCharts] = useState<Record<string, boolean>>({});
+  const configEndpoint = (options?.configJsonEndpoint ?? "").trim();
   const panelConfig = useMemo<PanelConfig>(() => {
-    const parsed = parsePanelConfig(options?.configJson);
-    return parsed.config ?? defaultPanelConfig;
-  }, [options?.configJson]);
-  const configError = useMemo(() => parsePanelConfig(options?.configJson).error, [options?.configJson]);
+    return localParsedConfig.config ?? remotePanelConfig ?? defaultPanelConfig;
+  }, [localParsedConfig.config, remotePanelConfig]);
+  const configError = useMemo(() => {
+    if (remotePanelConfig) return null;
+    if (localParsedConfig.error) return localParsedConfig.error;
+    return remoteConfigError;
+  }, [localParsedConfig.error, remoteConfigError, remotePanelConfig]);
   const categories = panelConfig.categories ?? [];
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [chartErrors, setChartErrors] = useState<Record<string, string>>({});
@@ -450,6 +471,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
     chartInstancesRef.current = {};
     domRefs.current = {};
+    setLoadingCharts({});
     const initialOpen = new Set<string>();
     if (sections[0]?.key) {
       initialOpen.add(sections[0].key);
@@ -473,8 +495,64 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     inFlightRef.current = {};
   }, [data?.request?.scopedVars]);
 
+  useEffect(() => {
+    let isCancelled = false;
+    const loadRemoteConfig = async () => {
+      if (localParsedConfig.config || !configEndpoint) {
+        setRemotePanelConfig(null);
+        setRemoteConfigError(null);
+        setIsRemoteConfigLoading(false);
+        return;
+      }
+
+      try {
+        setIsRemoteConfigLoading(true);
+        setRemoteConfigError(null);
+        const endpointUrl = replaceVars(configEndpoint, data?.request?.scopedVars);
+        const response = await fetch(endpointUrl);
+        if (!response.ok) {
+          throw new Error(`Error HTTP ${response.status} al consultar ${endpointUrl}`);
+        }
+        const contentType = response.headers.get("content-type") ?? "";
+        const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+        const parsed = parsePanelConfigUnknown(payload);
+        if (parsed.error || !parsed.config) {
+          throw new Error(parsed.error ?? "La configuracion remota no es valida.");
+        }
+        if (isCancelled) return;
+        setRemotePanelConfig(parsed.config);
+      } catch (error) {
+        if (isCancelled) return;
+        const message =
+          error instanceof Error ? error.message : "No se pudo cargar la configuracion remota del panel.";
+        setRemotePanelConfig(null);
+        setRemoteConfigError(message);
+      } finally {
+        if (!isCancelled) {
+          setIsRemoteConfigLoading(false);
+        }
+      }
+    };
+
+    loadRemoteConfig();
+    return () => {
+      isCancelled = true;
+    };
+  }, [configEndpoint, data?.request?.scopedVars, localParsedConfig.config]);
+
   const wrapperClass = useMemo(
     () => css`
+      @keyframes dsk-blink {
+        0%,
+        100% {
+          opacity: 0.35;
+          transform: translateY(0);
+        }
+        50% {
+          opacity: 1;
+          transform: translateY(-2px);
+        }
+      }
       width: ${width}px;
       height: ${height}px;
       overflow: auto;
@@ -488,6 +566,51 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const onToggleCategory = useCallback((category: string) => {
     setSelectedCategory(category);
   }, []);
+
+  const handleBarSelection = useCallback(
+    (name: string) => {
+      const scopedVars = data?.request?.scopedVars;
+      const selectedValue = replaceVars("${seleccion_valor}", scopedVars).trim();
+      const resolvedDataset = replaceVars("${estadosquaker}", scopedVars);
+      const datasetValue = resolvedDataset && resolvedDataset !== "${estadosquaker}" ? resolvedDataset : "estadosquaker";
+
+      locationService.partial(
+        { "var-geomap_wms_spatial_filter_geometry": "POLYGON((-180 -90,180 -90,180 90,-180 90,-180 -90))" },
+        true
+      );
+
+      if (selectedValue !== name) {
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("entidad", name);
+          sessionStorage.removeItem("zona");
+          sessionStorage.removeItem("municipio");
+        }
+        locationService.partial(
+          {
+            "var-seleccion_atributo": "nomgeo",
+            "var-seleccion_dataset": datasetValue,
+            "var-seleccion_valor": name,
+          },
+          true
+        );
+        return;
+      }
+
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem("municipio");
+        sessionStorage.removeItem("zona");
+      }
+      locationService.partial(
+        {
+          "var-seleccion_valor": " ",
+          "var-seleccion_atributo": " ",
+          "var-seleccion_dataset": " ",
+        },
+        true
+      );
+    },
+    [data?.request?.scopedVars]
+  );
 
   const ensureChart = useCallback(
     (groupKey: string, option: echarts.EChartsOption) => {
@@ -518,9 +641,15 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         chartInstancesRef.current[groupKey] = chart;
       }
       chart.setOption(option as any, { notMerge: true, lazyUpdate: true });
+      chart.off("click");
+      chart.on("click", (params: any) => {
+        if (params?.componentType !== "series") return;
+        if (!params?.name) return;
+        handleBarSelection(String(params.name));
+      });
       chart.resize();
     },
-    []
+    [handleBarSelection]
   );
 
   const buildUrl = (endpoint: ChartEndpoint, scopedVars?: Record<string, any>) => {
@@ -602,6 +731,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       if (inflight) return inflight;
 
       const promise = (async () => {
+        if (chart.endpoint) {
+          setLoadingCharts((prev) => ({ ...prev, [cacheKey]: true }));
+        }
         try {
           let option = chart.option ?? null;
           let payload: unknown = null;
@@ -637,6 +769,15 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           setChartErrors((prev) => ({ ...prev, [cacheKey]: message }));
           errorCacheRef.current[cacheKey] = Date.now();
           return null;
+        } finally {
+          if (chart.endpoint) {
+            setLoadingCharts((prev) => {
+              if (!prev[cacheKey]) return prev;
+              const next = { ...prev };
+              delete next[cacheKey];
+              return next;
+            });
+          }
         }
       })();
 
@@ -800,6 +941,21 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           {configError}
         </div>
       )}
+      {isRemoteConfigLoading && !localParsedConfig.config && (
+        <div
+          className={css`
+            margin-bottom: 12px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(25, 90, 160, 0.1);
+            border: 1px solid rgba(25, 90, 160, 0.28);
+            color: #1d4f82;
+            font-size: 12px;
+          `}
+        >
+          Cargando configuracion desde endpoint alternativo...
+        </div>
+      )}
 
       {sections.map((cfg) => {
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
@@ -809,6 +965,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         const activeChart = visibleCharts.find((c) => c.key === activeKey) ?? visibleCharts[0];
         const errorKey = activeChart ? `${cfg.key}::${activeChart.key}` : "";
         const chartError = errorKey ? chartErrors[errorKey] : null;
+        const chartLoading = errorKey ? Boolean(loadingCharts[errorKey]) : false;
         return (
         <details
           key={cfg.key}
@@ -925,10 +1082,67 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           )}
 
           <div
-            ref={activeChart ? makeChartRef(cfg.key, activeChart) : undefined}
-            style={{ width: "100%", height: activeChart?.height ?? 280 }}
-            className={css`padding: 10px 12px 16px;`}
-          />
+            className={css`
+              position: relative;
+              padding: 10px 12px 16px;
+            `}
+          >
+            <div
+              ref={activeChart ? makeChartRef(cfg.key, activeChart) : undefined}
+              style={{ width: "100%", height: activeChart?.height ?? 280 }}
+            />
+            {chartLoading && (
+              <div
+                className={css`
+                  position: absolute;
+                  inset: 10px 12px 16px;
+                  border-radius: 10px;
+                  background: rgba(240, 245, 250, 0.72);
+                  backdrop-filter: blur(2px);
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 10px;
+                `}
+              >
+                <img
+                  src={logoDeskover}
+                  alt="Deskover cargando"
+                  className={css`
+                    height: 44px;
+                    width: auto;
+                    opacity: 0.92;
+                  `}
+                />
+                <div
+                  className={css`
+                    display: flex;
+                    gap: 8px;
+                  `}
+                >
+                  <span
+                    className={css`
+                      width: 10px;
+                      height: 10px;
+                      border-radius: 50%;
+                      background: #1f2d3d;
+                      animation: dsk-blink 1s infinite ease-in-out;
+                    `}
+                  />
+                  <span
+                    className={css`
+                      width: 10px;
+                      height: 10px;
+                      border-radius: 50%;
+                      background: #1f2d3d;
+                      animation: dsk-blink 1s 0.25s infinite ease-in-out;
+                    `}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </details>
       );
       })}

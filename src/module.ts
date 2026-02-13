@@ -5,6 +5,12 @@ import { ConfigJsonEditor } from './components/ConfigJsonEditor';
 
 export const plugin = new PanelPlugin<SimpleOptions>(SimplePanel).setPanelOptions((builder) => {
   return builder
+    .addTextInput({
+      path: 'configJsonEndpoint',
+      name: 'Config JSON endpoint (alternativo)',
+      description: 'Si no hay JSON local valido, se intentara cargar la configuracion desde este endpoint.',
+      defaultValue: '',
+    })
     .addCustomEditor({
       id: 'configJson',
       path: 'configJson',

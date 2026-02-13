@@ -5,6 +5,7 @@ import { css } from '@emotion/css';
 import prettier from 'prettier/standalone';
 import babel from 'prettier/plugins/babel';
 import estree from 'prettier/plugins/estree';
+import { SimpleOptions } from 'types';
 
 type Props = PanelOptionsEditorProps<string>;
 
@@ -97,30 +98,102 @@ const updateChartCode = (parsed: any, entry: ChartEntry, nextCode: string) => {
   return clone;
 };
 
-export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange }) => {
+const parseJsonSafe = (raw: string): { ok: true; value: any } | { ok: false } => {
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch {
+    return { ok: false };
+  }
+};
+
+const isUsablePanelConfig = (parsed: any): boolean => {
+  if (Array.isArray(parsed)) return true;
+  return Array.isArray(parsed?.categories) || Array.isArray(parsed?.categorias);
+};
+
+export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) => {
   const [localJson, setLocalJson] = useState(value ?? '');
+  const [remoteJson, setRemoteJson] = useState<string>('');
+  const [remoteError, setRemoteError] = useState<string | null>(null);
+  const [remoteLoading, setRemoteLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string>('');
-  const [parseError, setParseError] = useState<string | null>(null);
   const [codeError, setCodeError] = useState<string | null>(null);
+  const options = (context?.options as SimpleOptions | undefined) ?? undefined;
+  const configJsonEndpoint = (options?.configJsonEndpoint ?? '').trim();
 
   useEffect(() => {
     setLocalJson(value ?? '');
   }, [value]);
 
-  const parsed = useMemo(() => {
-    if (!localJson) {
-      setParseError(null);
-      return null;
-    }
-    try {
-      const obj = JSON.parse(localJson);
-      setParseError(null);
-      return obj;
-    } catch {
-      setParseError('JSON invalido. Corrige antes de editar el codigo.');
-      return null;
-    }
+  const localParsed = useMemo(() => {
+    if (!localJson) return null;
+    const parsed = parseJsonSafe(localJson);
+    if (!parsed.ok) return null;
+    return parsed.value;
   }, [localJson]);
+  const hasUsableLocalConfig = useMemo(() => (localParsed ? isUsablePanelConfig(localParsed) : false), [localParsed]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    const loadRemote = async () => {
+      if (hasUsableLocalConfig || !configJsonEndpoint) {
+        setRemoteJson('');
+        setRemoteError(null);
+        setRemoteLoading(false);
+        return;
+      }
+      try {
+        setRemoteLoading(true);
+        setRemoteError(null);
+        const endpointUrl = context?.replaceVariables
+          ? context.replaceVariables(configJsonEndpoint)
+          : configJsonEndpoint;
+        const response = await fetch(endpointUrl);
+        if (!response.ok) {
+          throw new Error(`Error HTTP ${response.status} al consultar ${endpointUrl}`);
+        }
+        const contentType = response.headers.get('content-type') ?? '';
+        const payload = contentType.includes('application/json') ? await response.json() : await response.text();
+        const parsedPayload = typeof payload === 'string' ? parseJsonSafe(payload) : { ok: true as const, value: payload };
+        if (!parsedPayload.ok || !isUsablePanelConfig(parsedPayload.value)) {
+          throw new Error('El endpoint debe responder un JSON con "categories" o "categorias" como arreglo.');
+        }
+        if (isCancelled) return;
+        setRemoteJson(JSON.stringify(parsedPayload.value, null, 2));
+      } catch (error) {
+        if (isCancelled) return;
+        const message = error instanceof Error ? error.message : 'No se pudo cargar el JSON remoto.';
+        setRemoteJson('');
+        setRemoteError(message);
+      } finally {
+        if (!isCancelled) {
+          setRemoteLoading(false);
+        }
+      }
+    };
+    loadRemote();
+    return () => {
+      isCancelled = true;
+    };
+  }, [configJsonEndpoint, context?.replaceVariables, hasUsableLocalConfig]);
+
+  const effectiveJson = useMemo(() => {
+    if (hasUsableLocalConfig) return localJson;
+    return remoteJson || localJson;
+  }, [hasUsableLocalConfig, localJson, remoteJson]);
+
+  const parsed = useMemo(() => {
+    if (!effectiveJson) return null;
+    const safe = parseJsonSafe(effectiveJson);
+    return safe.ok ? safe.value : null;
+  }, [effectiveJson]);
+
+  const parseError = useMemo(() => {
+    if (remoteError) return remoteError;
+    if (!effectiveJson) return null;
+    if (!parsed) return 'JSON invalido. Corrige antes de editar el codigo.';
+    return null;
+  }, [effectiveJson, parsed, remoteError]);
 
   const chartEntries = useMemo(() => (parsed ? extractCharts(parsed) : []), [parsed]);
 
@@ -184,12 +257,26 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange }) => {
         language="json"
         height="320px"
         width="100%"
-        value={localJson}
+        value={effectiveJson}
         onBlur={onValueChange}
         onSave={onValueChange}
         showMiniMap
         showLineNumbers
       />
+      {!hasUsableLocalConfig && configJsonEndpoint && (
+        <div
+          className={css`
+            font-size: 12px;
+            color: #5f6b7a;
+          `}
+        >
+          {remoteLoading
+            ? 'Cargando JSON desde endpoint alternativo...'
+            : remoteJson
+              ? 'Mostrando JSON desde endpoint alternativo. Si editas y guardas, se guardara en Panel JSON local.'
+              : 'No se pudo usar el endpoint alternativo; corrige el endpoint o el JSON local.'}
+        </div>
+      )}
 
       <div className={css`display: flex; flex-direction: column; gap: 8px;`}>
         <div className={css`display: flex; align-items: center; justify-content: space-between; gap: 8px;`}>
