@@ -3,7 +3,6 @@ import { PanelProps } from '@grafana/data';
 import { getTemplateSrv, locationService } from '@grafana/runtime';
 import { SimpleOptions } from 'types';
 import { css } from '@emotion/css';
-import logoDeskover from '../img/logo.svg';
 
 import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
@@ -377,7 +376,51 @@ const parsePanelConfig = (raw?: string): ParsedConfig => {
   }
 };
 
+const extractConfigCandidate = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== "object") return raw;
+
+  const asRecord = raw as Record<string, any>;
+  if (Array.isArray(asRecord.categories) || Array.isArray(asRecord.categorias)) {
+    return asRecord;
+  }
+
+  const directConfig = asRecord.json ?? asRecord.configJson ?? asRecord.config ?? asRecord.panelConfig;
+  if (directConfig !== undefined) {
+    return directConfig;
+  }
+
+  const nestedData = asRecord.data;
+  if (nestedData && typeof nestedData === "object") {
+    const nestedRecord = nestedData as Record<string, any>;
+    if (Array.isArray(nestedRecord.categories) || Array.isArray(nestedRecord.categorias)) {
+      return nestedRecord;
+    }
+    const nestedConfig =
+      nestedRecord.json ?? nestedRecord.configJson ?? nestedRecord.config ?? nestedRecord.panelConfig;
+    if (nestedConfig !== undefined) {
+      return nestedConfig;
+    }
+  }
+
+  return raw;
+};
+
 const parsePanelConfigUnknown = (raw: unknown): ParsedConfig => {
+  const candidate = extractConfigCandidate(raw);
+
+  if (typeof candidate === "string") {
+    try {
+      const parsed = JSON.parse(candidate);
+      return parsePanelConfigUnknown(parsed);
+    } catch {
+      return parsePanelConfig(candidate);
+    }
+  }
+
+  if (candidate !== raw) {
+    return parsePanelConfigUnknown(candidate);
+  }
+
   if (typeof raw === "string") {
     return parsePanelConfig(raw);
   }
@@ -553,6 +596,15 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           transform: translateY(-2px);
         }
       }
+      @keyframes dsk-loader-pulse {
+        0%,
+        100% {
+          opacity: 0.55;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
       width: ${width}px;
       height: ${height}px;
       overflow: auto;
@@ -640,7 +692,12 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         chart = echarts.init(el);
         chartInstancesRef.current[groupKey] = chart;
       }
-      chart.setOption(option as any, { notMerge: true, lazyUpdate: true });
+      const optionWithMotion: any = { ...(option as any) };
+      if (optionWithMotion.animationDuration == null) optionWithMotion.animationDuration = 420;
+      if (optionWithMotion.animationDurationUpdate == null) optionWithMotion.animationDurationUpdate = 520;
+      if (optionWithMotion.animationEasing == null) optionWithMotion.animationEasing = "cubicOut";
+      if (optionWithMotion.animationEasingUpdate == null) optionWithMotion.animationEasingUpdate = "quarticOut";
+      chart.setOption(optionWithMotion, { notMerge: true, lazyUpdate: true });
       chart.off("click");
       chart.on("click", (params: any) => {
         if (params?.componentType !== "series") return;
@@ -1089,59 +1146,105 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           >
             <div
               ref={activeChart ? makeChartRef(cfg.key, activeChart) : undefined}
-              style={{ width: "100%", height: activeChart?.height ?? 280 }}
+              style={{
+                width: "100%",
+                height: activeChart?.height ?? 280,
+                opacity: chartLoading ? 0.45 : 1,
+                filter: chartLoading ? "blur(1.25px)" : "blur(0px)",
+                transform: chartLoading ? "scale(0.995)" : "scale(1)",
+                transition: "opacity 240ms ease, filter 260ms ease, transform 260ms ease",
+              }}
             />
-            {chartLoading && (
+            <div
+              className={css`
+                position: absolute;
+                inset: 10px 12px 16px;
+                border-radius: 10px;
+                background: rgba(240, 245, 250, 0.72);
+                backdrop-filter: blur(2px);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                opacity: ${chartLoading ? 1 : 0};
+                transform: ${chartLoading ? "translateY(0)" : "translateY(4px)"};
+                transition: opacity 220ms ease, transform 220ms ease;
+                pointer-events: ${chartLoading ? "auto" : "none"};
+              `}
+            >
               <div
                 className={css`
-                  position: absolute;
-                  inset: 10px 12px 16px;
-                  border-radius: 10px;
-                  background: rgba(240, 245, 250, 0.72);
-                  backdrop-filter: blur(2px);
-                  display: flex;
-                  flex-direction: column;
+                  display: inline-flex;
                   align-items: center;
-                  justify-content: center;
-                  gap: 10px;
+                  gap: 12px;
                 `}
               >
-                <img
-                  src={logoDeskover}
-                  alt="Deskover cargando"
+                <span
                   className={css`
-                    height: 44px;
-                    width: auto;
-                    opacity: 0.92;
+                    width: 18px;
+                    height: 28px;
+                    border-left: 4px solid rgba(31, 45, 61, 0.8);
+                    border-top: 4px solid rgba(31, 45, 61, 0.8);
+                    border-bottom: 4px solid rgba(31, 45, 61, 0.8);
+                    border-right: 0;
+                    border-radius: 7px 0 0 7px;
+                    animation: dsk-loader-pulse 1.1s ease-in-out infinite;
                   `}
                 />
-                <div
+                <span
                   className={css`
-                    display: flex;
-                    gap: 8px;
+                    font-size: 48px;
+                    line-height: 1;
+                    font-weight: 700;
+                    letter-spacing: 2px;
+                    font-style: italic;
+                    color: rgba(31, 45, 61, 0.92);
+                    text-transform: uppercase;
                   `}
                 >
-                  <span
-                    className={css`
-                      width: 10px;
-                      height: 10px;
-                      border-radius: 50%;
-                      background: #1f2d3d;
-                      animation: dsk-blink 1s infinite ease-in-out;
-                    `}
-                  />
-                  <span
-                    className={css`
-                      width: 10px;
-                      height: 10px;
-                      border-radius: 50%;
-                      background: #1f2d3d;
-                      animation: dsk-blink 1s 0.25s infinite ease-in-out;
-                    `}
-                  />
-                </div>
+                  DESKOVER
+                </span>
+                <span
+                  className={css`
+                    width: 18px;
+                    height: 28px;
+                    border-right: 4px solid rgba(31, 45, 61, 0.8);
+                    border-top: 4px solid rgba(31, 45, 61, 0.8);
+                    border-bottom: 4px solid rgba(31, 45, 61, 0.8);
+                    border-left: 0;
+                    border-radius: 0 7px 7px 0;
+                    animation: dsk-loader-pulse 1.1s 0.2s ease-in-out infinite;
+                  `}
+                />
               </div>
-            )}
+              <div
+                className={css`
+                  display: flex;
+                  gap: 10px;
+                  margin-top: 2px;
+                `}
+              >
+                <span
+                  className={css`
+                    width: 11px;
+                    height: 11px;
+                    border-radius: 50%;
+                    background: #1f2d3d;
+                    animation: dsk-blink 1s infinite ease-in-out;
+                  `}
+                />
+                <span
+                  className={css`
+                    width: 11px;
+                    height: 11px;
+                    border-radius: 50%;
+                    background: #1f2d3d;
+                    animation: dsk-blink 1s 0.22s infinite ease-in-out;
+                  `}
+                />
+              </div>
+            </div>
           </div>
         </details>
       );
