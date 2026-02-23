@@ -28,6 +28,8 @@ type AccordionConfig = {
 type CategoryConfig = {
   key: string;
   title: string;
+  accordionLayoutMode?: "vertical" | "horizontal";
+  accordionColumns?: 1 | 2 | 3;
   sections: AccordionConfig[];
 };
 
@@ -251,6 +253,74 @@ const getVarCalculo = (): string => {
 };
 
 const normalizeCalculo = (value: string) => value.trim().toLowerCase();
+const getThemeModeFromUrl = (search: string): "light" | "dark" => {
+  try {
+    const params = new URLSearchParams(search);
+    const raw = params.get("theme") ?? params.get("var-theme") ?? "";
+    return raw.trim().toLowerCase() === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+};
+
+const withDarkChartText = (option: any): any => {
+  const text = "#f3f4f6";
+  const subtle = "rgba(243, 244, 246, 0.78)";
+  const split = "rgba(243, 244, 246, 0.10)";
+
+  const next: any = { ...(option ?? {}) };
+
+  next.textStyle = { ...(next.textStyle ?? {}), color: text };
+  if (next.title) {
+    const titles = Array.isArray(next.title) ? next.title : [next.title];
+    next.title = titles.map((t: any) => ({ ...(t ?? {}), textStyle: { ...(t?.textStyle ?? {}), color: text } }));
+    if (!Array.isArray(option?.title)) next.title = next.title[0];
+  }
+
+  if (next.legend) {
+    const legends = Array.isArray(next.legend) ? next.legend : [next.legend];
+    next.legend = legends.map((l: any) => ({ ...(l ?? {}), textStyle: { ...(l?.textStyle ?? {}), color: subtle } }));
+    if (!Array.isArray(option?.legend)) next.legend = next.legend[0];
+  }
+
+  const patchAxis = (axis: any) => ({
+    ...(axis ?? {}),
+    axisLabel: { ...(axis?.axisLabel ?? {}), color: text },
+    nameTextStyle: { ...(axis?.nameTextStyle ?? {}), color: subtle },
+    axisLine: {
+      ...(axis?.axisLine ?? {}),
+      lineStyle: { ...(axis?.axisLine?.lineStyle ?? {}), color: subtle },
+    },
+    splitLine: {
+      ...(axis?.splitLine ?? {}),
+      lineStyle: { ...(axis?.splitLine?.lineStyle ?? {}), color: split },
+    },
+  });
+
+  if (next.xAxis) {
+    next.xAxis = Array.isArray(next.xAxis) ? next.xAxis.map(patchAxis) : patchAxis(next.xAxis);
+  }
+  if (next.yAxis) {
+    next.yAxis = Array.isArray(next.yAxis) ? next.yAxis.map(patchAxis) : patchAxis(next.yAxis);
+  }
+
+  if (next.series) {
+    const series = Array.isArray(next.series) ? next.series : [next.series];
+    next.series = series.map((s: any) => ({
+      ...(s ?? {}),
+      label: { ...(s?.label ?? {}), color: text },
+      endLabel: { ...(s?.endLabel ?? {}), color: text },
+    }));
+    if (!Array.isArray(option?.series)) next.series = next.series[0];
+  }
+
+  next.tooltip = {
+    ...(next.tooltip ?? {}),
+    textStyle: { ...(next.tooltip?.textStyle ?? {}), color: text },
+  };
+
+  return next;
+};
 
 type ParsedConfig = { config: PanelConfig | null; error: string | null };
 
@@ -321,13 +391,40 @@ const normalizeSection = (raw: any, sectionIndex: number, categoryKey: string): 
   };
 };
 
+const normalizeAccordionLayout = (raw: any): { mode: "vertical" | "horizontal"; columns: 1 | 2 | 3 } => {
+  const source = raw?.accordionLayout ?? raw?.layoutAcordeones ?? raw?.acordeones ?? raw?.layout ?? {};
+  const modeRaw =
+    source?.mode ??
+    source?.modo ??
+    raw?.accordionLayoutMode ??
+    raw?.modoAcordeones ??
+    raw?.accordionMode ??
+    raw?.layoutMode;
+  const normalizedMode = typeof modeRaw === "string" && modeRaw.trim().toLowerCase().startsWith("h")
+    ? "horizontal"
+    : "vertical";
+  const columnsRaw =
+    source?.columns ??
+    source?.columnas ??
+    raw?.accordionColumns ??
+    raw?.columnasAcordeones ??
+    raw?.layoutColumns;
+  const parsedColumns = Number.parseInt(String(columnsRaw ?? "1"), 10);
+  const clampedColumns = Number.isFinite(parsedColumns) ? Math.max(1, Math.min(3, parsedColumns)) : 1;
+  const columns = (normalizedMode === "horizontal" ? clampedColumns : 1) as 1 | 2 | 3;
+  return { mode: normalizedMode, columns };
+};
+
 const normalizeCategory = (raw: any, categoryIndex: number): CategoryConfig => {
   const sectionsRaw = raw.sections ?? raw.secciones ?? [];
   const title = raw.title ?? raw.titulo ?? "";
   const key = safeKey(raw.key ?? raw.clave, "category", categoryIndex, title);
+  const accordionLayout = normalizeAccordionLayout(raw);
   return {
     key,
     title,
+    accordionLayoutMode: accordionLayout.mode,
+    accordionColumns: accordionLayout.columns,
     sections: Array.isArray(sectionsRaw)
       ? sectionsRaw.map((section: any, sectionIndex: number) => normalizeSection(section, sectionIndex, key))
       : [],
@@ -463,6 +560,71 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const [urlSearch, setUrlSearch] = useState<string>(() =>
     typeof window === "undefined" ? "" : window.location.search
   );
+  const themeMode = useMemo(() => getThemeModeFromUrl(urlSearch), [urlSearch]);
+  const isLightTheme = themeMode === "light";
+  const ui = useMemo(
+    () =>
+      isLightTheme
+        ? {
+            wrapperBgStart: "rgba(235, 241, 247, 0.75)",
+            wrapperBgEnd: "rgba(255, 255, 255, 0.9)",
+            toolbarBg: "rgba(255, 255, 255, 0.85)",
+            toolbarBorder: "rgba(31, 45, 61, 0.12)",
+            toolbarShadow: "rgba(18, 38, 63, 0.06)",
+            textPrimary: "#1f2d3d",
+            chipActiveBorder: "#1f2d3d",
+            chipActiveBg: "#1f2d3d",
+            chipActiveText: "#ffffff",
+            chipBorder: "rgba(31, 45, 61, 0.2)",
+            chipBg: "#ffffff",
+            chipText: "#1f2d3d",
+            infoBg: "rgba(25, 90, 160, 0.1)",
+            infoBorder: "rgba(25, 90, 160, 0.28)",
+            infoText: "#1d4f82",
+            cardBorder: "rgba(35, 55, 90, 0.12)",
+            cardBg: "#ffffff",
+            cardShadow1: "rgba(18, 38, 63, 0.08)",
+            cardShadow2: "rgba(18, 38, 63, 0.06)",
+            summaryBg: "linear-gradient(90deg, #1f2d3d 0%, #2c3e50 100%)",
+            summaryText: "#f7fbff",
+            chipXActiveBg: "rgba(255, 255, 255, 0.2)",
+            chipXBg: "rgba(31, 45, 61, 0.12)",
+            overlayBg: "rgba(240, 245, 250, 0.72)",
+            loaderInk: "rgba(31, 45, 61, 0.8)",
+            loaderWord: "rgba(31, 45, 61, 0.92)",
+            loaderDot: "#1f2d3d",
+          }
+        : {
+            wrapperBgStart: "rgba(28, 31, 36, 0.92)",
+            wrapperBgEnd: "rgba(18, 20, 24, 0.98)",
+            toolbarBg: "rgba(33, 36, 42, 0.9)",
+            toolbarBorder: "rgba(229, 231, 235, 0.16)",
+            toolbarShadow: "rgba(0, 0, 0, 0.45)",
+            textPrimary: "#f3f4f6",
+            chipActiveBorder: "#f3f4f6",
+            chipActiveBg: "#e5e7eb",
+            chipActiveText: "#111827",
+            chipBorder: "rgba(229, 231, 235, 0.26)",
+            chipBg: "rgba(42, 46, 54, 0.95)",
+            chipText: "#f3f4f6",
+            infoBg: "rgba(75, 85, 99, 0.22)",
+            infoBorder: "rgba(229, 231, 235, 0.24)",
+            infoText: "#f9fafb",
+            cardBorder: "rgba(229, 231, 235, 0.16)",
+            cardBg: "#1f232b",
+            cardShadow1: "rgba(0, 0, 0, 0.52)",
+            cardShadow2: "rgba(0, 0, 0, 0.34)",
+            summaryBg: "linear-gradient(90deg, #20242c 0%, #2b313a 100%)",
+            summaryText: "#f9fafb",
+            chipXActiveBg: "rgba(17, 24, 39, 0.35)",
+            chipXBg: "rgba(229, 231, 235, 0.20)",
+            overlayBg: "rgba(22, 25, 30, 0.74)",
+            loaderInk: "rgba(243, 244, 246, 0.92)",
+            loaderWord: "rgba(249, 250, 251, 0.97)",
+            loaderDot: "#f3f4f6",
+          },
+    [isLightTheme]
+  );
   const scopedVarsKey = useMemo(() => {
     try {
       return JSON.stringify(data?.request?.scopedVars ?? {});
@@ -559,10 +721,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     });
   }, [calculo, categories]);
 
-  const sections = useMemo(() => {
-    const category = categories.find((item) => item.key === selectedCategory) ?? categories[0];
-    return category?.sections ?? [];
-  }, [categories, selectedCategory]);
+  const selectedCategoryConfig = useMemo(
+    () => categories.find((item) => item.key === selectedCategory) ?? categories[0],
+    [categories, selectedCategory]
+  );
+  const sections = selectedCategoryConfig?.sections ?? [];
+  const accordionLayoutMode = selectedCategoryConfig?.accordionLayoutMode ?? "vertical";
+  const accordionColumns = selectedCategoryConfig?.accordionColumns ?? 1;
 
   useEffect(() => {
     Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
@@ -664,10 +829,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       height: ${height}px;
       overflow: auto;
       padding: 12px;
-      background: linear-gradient(135deg, rgba(235, 241, 247, 0.75), rgba(255, 255, 255, 0.9));
+      background: linear-gradient(135deg, ${ui.wrapperBgStart}, ${ui.wrapperBgEnd});
       border-radius: 14px;
     `,
-    [width, height]
+    [height, ui.wrapperBgEnd, ui.wrapperBgStart, width]
   );
 
   const onToggleCategory = useCallback((category: string) => {
@@ -752,7 +917,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       if (optionWithMotion.animationDurationUpdate == null) optionWithMotion.animationDurationUpdate = 520;
       if (optionWithMotion.animationEasing == null) optionWithMotion.animationEasing = "cubicOut";
       if (optionWithMotion.animationEasingUpdate == null) optionWithMotion.animationEasingUpdate = "quarticOut";
-      chart.setOption(optionWithMotion, { notMerge: true, lazyUpdate: true });
+      const finalOption = isLightTheme ? optionWithMotion : withDarkChartText(optionWithMotion);
+      chart.setOption(finalOption, { notMerge: true, lazyUpdate: true });
       chart.off("click");
       chart.on("click", (params: any) => {
         if (params?.componentType !== "series") return;
@@ -761,7 +927,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       });
       chart.resize();
     },
-    [handleBarSelection]
+    [handleBarSelection, isLightTheme]
   );
 
   const buildUrl = (endpoint: ChartEndpoint, scopedVars?: Record<string, any>) => {
@@ -1005,46 +1171,48 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
   return (
     <div className={wrapperClass}>
-      <div
-        className={css`
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 8px 10px;
-          margin-bottom: 12px;
-          border-radius: 12px;
-          background: rgba(255, 255, 255, 0.85);
-          border: 1px solid rgba(31, 45, 61, 0.12);
-          box-shadow: 0 4px 12px rgba(18, 38, 63, 0.06);
-        `}
-      >
-        <span className={css`font-size: 12px; font-weight: 700; color: #1f2d3d;`}>
-          Mostrar:
-        </span>
-        {categories.map((category) => {
-          const isActive = selectedCategory === category.key;
-          return (
-            <button
-              key={category.key}
-              type="button"
-              onClick={() => onToggleCategory(category.key)}
-              aria-pressed={isActive}
-              className={css`
-                border: 1px solid ${isActive ? "#1f2d3d" : "rgba(31, 45, 61, 0.2)"};
-                background: ${isActive ? "#1f2d3d" : "#ffffff"};
-                color: ${isActive ? "#ffffff" : "#1f2d3d"};
-                font-size: 12px;
-                font-weight: 600;
-                padding: 6px 12px;
-                border-radius: 999px;
-                cursor: pointer;
-              `}
-            >
-              {category.title}
-            </button>
-          );
-        })}
-      </div>
+      {categories.length > 1 && (
+        <div
+          className={css`
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            margin-bottom: 12px;
+            border-radius: 12px;
+            background: ${ui.toolbarBg};
+            border: 1px solid ${ui.toolbarBorder};
+            box-shadow: 0 4px 12px ${ui.toolbarShadow};
+          `}
+        >
+          <span className={css`font-size: 12px; font-weight: 700; color: ${ui.textPrimary};`}>
+            Mostrar:
+          </span>
+          {categories.map((category) => {
+            const isActive = selectedCategory === category.key;
+            return (
+              <button
+                key={category.key}
+                type="button"
+                onClick={() => onToggleCategory(category.key)}
+                aria-pressed={isActive}
+                className={css`
+                  border: 1px solid ${isActive ? ui.chipActiveBorder : ui.chipBorder};
+                  background: ${isActive ? ui.chipActiveBg : ui.chipBg};
+                  color: ${isActive ? ui.chipActiveText : ui.chipText};
+                  font-size: 12px;
+                  font-weight: 600;
+                  padding: 6px 12px;
+                  border-radius: 999px;
+                  cursor: pointer;
+                `}
+              >
+                {category.title}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {configError && (
         <div
@@ -1067,9 +1235,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             margin-bottom: 12px;
             padding: 10px 12px;
             border-radius: 10px;
-            background: rgba(25, 90, 160, 0.1);
-            border: 1px solid rgba(25, 90, 160, 0.28);
-            color: #1d4f82;
+            background: ${ui.infoBg};
+            border: 1px solid ${ui.infoBorder};
+            color: ${ui.infoText};
             font-size: 12px;
           `}
         >
@@ -1077,6 +1245,14 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         </div>
       )}
 
+      <div
+        className={css`
+          display: ${accordionLayoutMode === "horizontal" ? "grid" : "block"};
+          grid-template-columns: ${accordionLayoutMode === "horizontal" ? `repeat(${accordionColumns}, minmax(0, 1fr))` : "none"};
+          gap: ${accordionLayoutMode === "horizontal" ? "12px" : "0"};
+          align-items: start;
+        `}
+      >
       {sections.map((cfg) => {
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
@@ -1092,13 +1268,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           open={openKeys.has(cfg.key)}
           onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
           className={css`
-            margin-bottom: 12px;
+            margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
             border-radius: 12px;
-            border: 1px solid rgba(35, 55, 90, 0.12);
-            background: #ffffff;
+            border: 1px solid ${ui.cardBorder};
+            background: ${ui.cardBg};
             box-shadow:
-              0 6px 18px rgba(18, 38, 63, 0.08),
-              0 2px 6px rgba(18, 38, 63, 0.06);
+              0 6px 18px ${ui.cardShadow1},
+              0 2px 6px ${ui.cardShadow2};
             overflow: hidden;
           `}
         >
@@ -1112,8 +1288,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               align-items: center;
               justify-content: space-between;
               gap: 10px;
-              background: linear-gradient(90deg, #1f2d3d 0%, #2c3e50 100%);
-              color: #f7fbff;
+              background: ${ui.summaryBg};
+              color: ${ui.summaryText};
             `}
           >
             <span className={css`display: flex; flex-direction: column; gap: 2px;`}>
@@ -1127,63 +1303,65 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             <span className={css`font-size: 12px; opacity: 0.8;`}>Ver grafica</span>
           </summary>
 
-          <div
-            className={css`
-              display: flex;
-              gap: 8px;
-              flex-wrap: wrap;
-              padding: 10px 12px 0;
-            `}
-          >
-            {visibleCharts.map((chart) => {
-              const isActive = chart.key === activeKey;
-              return (
-                <button
-                  key={chart.key}
-                  type="button"
-                  onClick={() => onSwitchChart(cfg.key, chart.key)}
-                  className={css`
-                    border: 1px solid ${isActive ? "#1f2d3d" : "rgba(31, 45, 61, 0.2)"};
-                    background: ${isActive ? "#1f2d3d" : "#ffffff"};
-                    color: ${isActive ? "#ffffff" : "#1f2d3d"};
-                    font-size: 12px;
-                    font-weight: 600;
-                    padding: 6px 10px;
-                    border-radius: 999px;
-                    cursor: pointer;
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 8px;
-                  `}
-                >
-                  <span>{chart.title}</span>
-                  <span
-                    role="button"
-                    aria-label={`Eliminar ${chart.title}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRemoveChart(cfg.key, chart.key);
-                    }}
+          {visibleCharts.length > 1 && (
+            <div
+              className={css`
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                padding: 10px 12px 0;
+              `}
+            >
+              {visibleCharts.map((chart) => {
+                const isActive = chart.key === activeKey;
+                return (
+                  <button
+                    key={chart.key}
+                    type="button"
+                    onClick={() => onSwitchChart(cfg.key, chart.key)}
                     className={css`
+                      border: 1px solid ${isActive ? ui.chipActiveBorder : ui.chipBorder};
+                      background: ${isActive ? ui.chipActiveBg : ui.chipBg};
+                      color: ${isActive ? ui.chipActiveText : ui.chipText};
+                      font-size: 12px;
+                      font-weight: 600;
+                      padding: 6px 10px;
+                      border-radius: 999px;
+                      cursor: pointer;
                       display: inline-flex;
                       align-items: center;
-                      justify-content: center;
-                      width: 16px;
-                      height: 16px;
-                      border-radius: 50%;
-                      font-size: 12px;
-                      line-height: 12px;
-                      background: ${isActive ? "rgba(255, 255, 255, 0.2)" : "rgba(31, 45, 61, 0.12)"};
-                      color: ${isActive ? "#ffffff" : "#1f2d3d"};
-                      cursor: pointer;
+                      gap: 8px;
                     `}
                   >
-                    ×
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+                    <span>{chart.title}</span>
+                    <span
+                      role="button"
+                      aria-label={`Eliminar ${chart.title}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveChart(cfg.key, chart.key);
+                      }}
+                      className={css`
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 50%;
+                        font-size: 12px;
+                        line-height: 12px;
+                        background: ${isActive ? ui.chipXActiveBg : ui.chipXBg};
+                        color: ${isActive ? ui.chipActiveText : ui.chipText};
+                        cursor: pointer;
+                      `}
+                    >
+                      ×
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {chartError && (
             <div
@@ -1223,7 +1401,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                 position: absolute;
                 inset: 10px 12px 16px;
                 border-radius: 10px;
-                background: rgba(240, 245, 250, 0.72);
+                background: ${ui.overlayBg};
                 backdrop-filter: blur(2px);
                 display: flex;
                 flex-direction: column;
@@ -1247,9 +1425,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                   className={css`
                     width: 18px;
                     height: 28px;
-                    border-left: 4px solid rgba(31, 45, 61, 0.8);
-                    border-top: 4px solid rgba(31, 45, 61, 0.8);
-                    border-bottom: 4px solid rgba(31, 45, 61, 0.8);
+                    border-left: 4px solid ${ui.loaderInk};
+                    border-top: 4px solid ${ui.loaderInk};
+                    border-bottom: 4px solid ${ui.loaderInk};
                     border-right: 0;
                     border-radius: 7px 0 0 7px;
                     animation: dsk-loader-pulse 1.1s ease-in-out infinite;
@@ -1262,7 +1440,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                     font-weight: 700;
                     letter-spacing: 2px;
                     font-style: italic;
-                    color: rgba(31, 45, 61, 0.92);
+                    color: ${ui.loaderWord};
                     text-transform: uppercase;
                   `}
                 >
@@ -1272,9 +1450,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                   className={css`
                     width: 18px;
                     height: 28px;
-                    border-right: 4px solid rgba(31, 45, 61, 0.8);
-                    border-top: 4px solid rgba(31, 45, 61, 0.8);
-                    border-bottom: 4px solid rgba(31, 45, 61, 0.8);
+                    border-right: 4px solid ${ui.loaderInk};
+                    border-top: 4px solid ${ui.loaderInk};
+                    border-bottom: 4px solid ${ui.loaderInk};
                     border-left: 0;
                     border-radius: 0 7px 7px 0;
                     animation: dsk-loader-pulse 1.1s 0.2s ease-in-out infinite;
@@ -1293,7 +1471,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                     width: 11px;
                     height: 11px;
                     border-radius: 50%;
-                    background: #1f2d3d;
+                    background: ${ui.loaderDot};
                     animation: dsk-blink 1s infinite ease-in-out;
                   `}
                 />
@@ -1302,7 +1480,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                     width: 11px;
                     height: 11px;
                     border-radius: 50%;
-                    background: #1f2d3d;
+                    background: ${ui.loaderDot};
                     animation: dsk-blink 1s 0.22s infinite ease-in-out;
                   `}
                 />
@@ -1312,6 +1490,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         </details>
       );
       })}
+      </div>
     </div>
   );
 };
