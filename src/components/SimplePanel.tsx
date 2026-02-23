@@ -277,10 +277,29 @@ const normalizeEndpoint = (raw?: any): ChartEndpoint | undefined => {
   };
 };
 
-const normalizeChart = (raw: any): ChartConfig => {
+const slugPart = (value: any): string => {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .slice(0, 40);
+};
+
+const safeKey = (rawKey: any, fallbackPrefix: string, index: number, title?: any): string => {
+  const keyFromRaw = typeof rawKey === "string" ? rawKey.trim() : "";
+  if (keyFromRaw) return keyFromRaw;
+  const titleSlug = slugPart(title);
+  return titleSlug ? `${fallbackPrefix}_${titleSlug}_${index}` : `${fallbackPrefix}_${index}`;
+};
+
+const normalizeChart = (raw: any, chartIndex: number, sectionKey: string): ChartConfig => {
+  const title = raw.title ?? raw.titulo ?? "";
+  const key = safeKey(raw.key ?? raw.clave, `${sectionKey}_chart`, chartIndex, title);
   return {
-    key: raw.key ?? raw.clave ?? "",
-    title: raw.title ?? raw.titulo ?? "",
+    key,
+    title,
     height: raw.height ?? raw.altura,
     option: raw.option ?? raw.opcion,
     endpoint: normalizeEndpoint(raw.endpoint ?? raw.puntoFinal ?? raw.endpointConfig ?? raw.conexion ?? raw.refId),
@@ -288,22 +307,30 @@ const normalizeChart = (raw: any): ChartConfig => {
   };
 };
 
-const normalizeSection = (raw: any): AccordionConfig => {
+const normalizeSection = (raw: any, sectionIndex: number, categoryKey: string): AccordionConfig => {
   const chartsRaw = raw.charts ?? raw.graficas ?? raw.graficos ?? [];
+  const title = raw.title ?? raw.titulo ?? "";
+  const key = safeKey(raw.key ?? raw.clave, `${categoryKey}_section`, sectionIndex, title);
   return {
-    key: raw.key ?? raw.clave ?? "",
-    title: raw.title ?? raw.titulo ?? "",
+    key,
+    title,
     subtitle: raw.subtitle ?? raw.subtitulo,
-    charts: Array.isArray(chartsRaw) ? chartsRaw.map(normalizeChart) : [],
+    charts: Array.isArray(chartsRaw)
+      ? chartsRaw.map((chart: any, chartIndex: number) => normalizeChart(chart, chartIndex, key))
+      : [],
   };
 };
 
-const normalizeCategory = (raw: any): CategoryConfig => {
+const normalizeCategory = (raw: any, categoryIndex: number): CategoryConfig => {
   const sectionsRaw = raw.sections ?? raw.secciones ?? [];
+  const title = raw.title ?? raw.titulo ?? "";
+  const key = safeKey(raw.key ?? raw.clave, "category", categoryIndex, title);
   return {
-    key: raw.key ?? raw.clave ?? "",
-    title: raw.title ?? raw.titulo ?? "",
-    sections: Array.isArray(sectionsRaw) ? sectionsRaw.map(normalizeSection) : [],
+    key,
+    title,
+    sections: Array.isArray(sectionsRaw)
+      ? sectionsRaw.map((section: any, sectionIndex: number) => normalizeSection(section, sectionIndex, key))
+      : [],
   };
 };
 
@@ -312,7 +339,7 @@ const normalizeConfig = (parsed: any): PanelConfig | null => {
     ? parsed
     : parsed?.categories ?? parsed?.categorias;
   if (!Array.isArray(categoriesRaw)) return null;
-  return { categories: categoriesRaw.map(normalizeCategory) };
+  return { categories: categoriesRaw.map((category: any, categoryIndex: number) => normalizeCategory(category, categoryIndex)) };
 };
 
 const replaceVars = (value: string, scopedVars?: Record<string, any>, format?: string) => {
@@ -433,15 +460,32 @@ const parsePanelConfigUnknown = (raw: unknown): ParsedConfig => {
 
 export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fieldConfig, id }) => {
   const [calculo, setCalculo] = useState<string>(() => getVarCalculo());
+  const [urlSearch, setUrlSearch] = useState<string>(() =>
+    typeof window === "undefined" ? "" : window.location.search
+  );
+  const scopedVarsKey = useMemo(() => {
+    try {
+      return JSON.stringify(data?.request?.scopedVars ?? {});
+    } catch {
+      return "";
+    }
+  }, [data?.request?.scopedVars]);
+  const varsFingerprint = `${scopedVarsKey}|${urlSearch}`;
+  const [stabilizedVarsFingerprint, setStabilizedVarsFingerprint] = useState<string>(varsFingerprint);
+  const isWaitingVars = varsFingerprint !== stabilizedVarsFingerprint;
   const localParsedConfig = useMemo(() => parsePanelConfig(options?.configJson), [options?.configJson]);
   const [remotePanelConfig, setRemotePanelConfig] = useState<PanelConfig | null>(null);
   const [remoteConfigError, setRemoteConfigError] = useState<string | null>(null);
   const [isRemoteConfigLoading, setIsRemoteConfigLoading] = useState(false);
   const [loadingCharts, setLoadingCharts] = useState<Record<string, boolean>>({});
   const configEndpoint = (options?.configJsonEndpoint ?? "").trim();
+  const preferRemoteConfig = Boolean(configEndpoint);
   const panelConfig = useMemo<PanelConfig>(() => {
+    if (preferRemoteConfig) {
+      return remotePanelConfig ?? localParsedConfig.config ?? defaultPanelConfig;
+    }
     return localParsedConfig.config ?? remotePanelConfig ?? defaultPanelConfig;
-  }, [localParsedConfig.config, remotePanelConfig]);
+  }, [localParsedConfig.config, preferRemoteConfig, remotePanelConfig]);
   const configError = useMemo(() => {
     if (remotePanelConfig) return null;
     if (localParsedConfig.error) return localParsedConfig.error;
@@ -462,6 +506,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const optionCacheRef = useRef<Record<string, echarts.EChartsOption | null>>({});
   const inFlightRef = useRef<Record<string, Promise<echarts.EChartsOption | null> | null>>({});
   const errorCacheRef = useRef<Record<string, number>>({});
+  const scopedVarsVersionRef = useRef(0);
 
   useEffect(() => {
     return () => {
@@ -477,6 +522,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     const updateFromUrl = () => {
       const next = getVarCalculo();
       setCalculo((prev) => (prev === next ? prev : next));
+      const nextSearch = window.location.search;
+      setUrlSearch((prev) => (prev === nextSearch ? prev : nextSearch));
     };
 
     updateFromUrl();
@@ -490,6 +537,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setStabilizedVarsFingerprint(varsFingerprint);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [varsFingerprint]);
 
   useEffect(() => {
     if (categories.length === 0) {
@@ -534,14 +588,15 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   }, [panelConfig]);
 
   useEffect(() => {
+    scopedVarsVersionRef.current += 1;
     optionCacheRef.current = {};
     inFlightRef.current = {};
-  }, [data?.request?.scopedVars]);
+  }, [stabilizedVarsFingerprint]);
 
   useEffect(() => {
     let isCancelled = false;
     const loadRemoteConfig = async () => {
-      if (localParsedConfig.config || !configEndpoint) {
+      if (!configEndpoint) {
         setRemotePanelConfig(null);
         setRemoteConfigError(null);
         setIsRemoteConfigLoading(false);
@@ -581,7 +636,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     return () => {
       isCancelled = true;
     };
-  }, [configEndpoint, data?.request?.scopedVars, localParsedConfig.config]);
+  }, [configEndpoint, stabilizedVarsFingerprint]);
 
   const wrapperClass = useMemo(
     () => css`
@@ -763,7 +818,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       return response.json();
     }
     return response.text();
-  }, [data?.request?.scopedVars, data?.series]);
+  }, [data?.request?.scopedVars, data?.series, stabilizedVarsFingerprint]);
 
   const buildOptionFromCode = useCallback((code: string, payload: unknown, vars: Record<string, unknown>) => {
     try {
@@ -778,6 +833,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const getChartOption = useCallback(
     async (groupKey: string, chart: ChartConfig) => {
       const cacheKey = `${groupKey}::${chart.key}`;
+      const scopedVarsVersionAtStart = scopedVarsVersionRef.current;
       const errorAt = errorCacheRef.current[cacheKey];
       if (errorAt && Date.now() - errorAt < 5000) {
         return null;
@@ -811,6 +867,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             option = null;
           }
 
+          if (scopedVarsVersionRef.current !== scopedVarsVersionAtStart) {
+            return null;
+          }
+
           if (option) {
             optionCacheRef.current[cacheKey] = option;
           }
@@ -822,6 +882,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           });
           return option;
         } catch (error) {
+          if (scopedVarsVersionRef.current !== scopedVarsVersionAtStart) {
+            return null;
+          }
           const message = error instanceof Error ? error.message : "Error al cargar la grafica";
           setChartErrors((prev) => ({ ...prev, [cacheKey]: message }));
           errorCacheRef.current[cacheKey] = Date.now();
@@ -1022,7 +1085,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         const activeChart = visibleCharts.find((c) => c.key === activeKey) ?? visibleCharts[0];
         const errorKey = activeChart ? `${cfg.key}::${activeChart.key}` : "";
         const chartError = errorKey ? chartErrors[errorKey] : null;
-        const chartLoading = errorKey ? Boolean(loadingCharts[errorKey]) : false;
+        const chartLoading = (errorKey ? Boolean(loadingCharts[errorKey]) : false) || isWaitingVars;
         return (
         <details
           key={cfg.key}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelOptionsEditorProps } from '@grafana/data';
 import { Button, CodeEditor, Select } from '@grafana/ui';
 import { css } from '@emotion/css';
@@ -111,11 +111,57 @@ const isUsablePanelConfig = (parsed: any): boolean => {
   return Array.isArray(parsed?.categories) || Array.isArray(parsed?.categorias);
 };
 
+const extractConfigCandidate = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== 'object') return raw;
+
+  const asRecord = raw as Record<string, any>;
+  if (isUsablePanelConfig(asRecord)) {
+    return asRecord;
+  }
+
+  const directConfig = asRecord.json ?? asRecord.configJson ?? asRecord.config ?? asRecord.panelConfig;
+  if (directConfig !== undefined) {
+    return directConfig;
+  }
+
+  const nestedData = asRecord.data;
+  if (nestedData && typeof nestedData === 'object') {
+    const nestedRecord = nestedData as Record<string, any>;
+    if (isUsablePanelConfig(nestedRecord)) {
+      return nestedRecord;
+    }
+    const nestedConfig =
+      nestedRecord.json ?? nestedRecord.configJson ?? nestedRecord.config ?? nestedRecord.panelConfig;
+    if (nestedConfig !== undefined) {
+      return nestedConfig;
+    }
+  }
+
+  return raw;
+};
+
+const resolveUsablePanelConfig = (raw: unknown): any | null => {
+  const candidate = extractConfigCandidate(raw);
+
+  if (typeof candidate === 'string') {
+    const parsed = parseJsonSafe(candidate);
+    if (!parsed.ok) return null;
+    return resolveUsablePanelConfig(parsed.value);
+  }
+
+  if (candidate !== raw) {
+    return resolveUsablePanelConfig(candidate);
+  }
+
+  return isUsablePanelConfig(candidate) ? candidate : null;
+};
+
 export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) => {
   const [localJson, setLocalJson] = useState(value ?? '');
   const [remoteJson, setRemoteJson] = useState<string>('');
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const [remoteLoading, setRemoteLoading] = useState(false);
+  const lastHydratedRemoteRef = useRef<string>('');
   const [selectedId, setSelectedId] = useState<string>('');
   const [codeError, setCodeError] = useState<string | null>(null);
   const options = (context?.options as SimpleOptions | undefined) ?? undefined;
@@ -131,7 +177,7 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
     if (!parsed.ok) return null;
     return parsed.value;
   }, [localJson]);
-  const hasUsableLocalConfig = useMemo(() => (localParsed ? isUsablePanelConfig(localParsed) : false), [localParsed]);
+  const hasUsableLocalConfig = useMemo(() => (localParsed ? Boolean(resolveUsablePanelConfig(localParsed)) : false), [localParsed]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -155,11 +201,12 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
         const contentType = response.headers.get('content-type') ?? '';
         const payload = contentType.includes('application/json') ? await response.json() : await response.text();
         const parsedPayload = typeof payload === 'string' ? parseJsonSafe(payload) : { ok: true as const, value: payload };
-        if (!parsedPayload.ok || !isUsablePanelConfig(parsedPayload.value)) {
+        const usableConfig = parsedPayload.ok ? resolveUsablePanelConfig(parsedPayload.value) : null;
+        if (!usableConfig) {
           throw new Error('El endpoint debe responder un JSON con "categories" o "categorias" como arreglo.');
         }
         if (isCancelled) return;
-        setRemoteJson(JSON.stringify(parsedPayload.value, null, 2));
+        setRemoteJson(JSON.stringify(usableConfig, null, 2));
       } catch (error) {
         if (isCancelled) return;
         const message = error instanceof Error ? error.message : 'No se pudo cargar el JSON remoto.';
@@ -176,6 +223,17 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
       isCancelled = true;
     };
   }, [configJsonEndpoint, context?.replaceVariables, hasUsableLocalConfig]);
+
+  useEffect(() => {
+    if (!remoteJson) return;
+    if (hasUsableLocalConfig) return;
+    if ((localJson ?? '').trim().length > 0) return;
+    if (lastHydratedRemoteRef.current === remoteJson) return;
+
+    lastHydratedRemoteRef.current = remoteJson;
+    setLocalJson(remoteJson);
+    onChange(remoteJson);
+  }, [hasUsableLocalConfig, localJson, onChange, remoteJson]);
 
   const effectiveJson = useMemo(() => {
     if (hasUsableLocalConfig) return localJson;
