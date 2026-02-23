@@ -541,7 +541,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setStabilizedVarsFingerprint(varsFingerprint);
-    }, 1500);
+    }, 300);
     return () => window.clearTimeout(timer);
   }, [varsFingerprint]);
 
