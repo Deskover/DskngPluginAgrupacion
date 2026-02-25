@@ -1281,15 +1281,27 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
   const onToggle = useCallback(
     (key: string, open: boolean) => {
-      setOpenKeys((prev) => {
-        const next = new Set(prev);
-        if (open) {
-          next.add(key);
-        } else {
-          next.delete(key);
-        }
-        return next;
-      });
+      const updateVisuals = () => {
+        setOpenKeys((prev) => {
+          const next = new Set(prev);
+          if (open) {
+            next.clear();
+            next.add(key);
+          } else {
+            next.delete(key);
+          }
+          return next;
+        });
+      };
+
+      if (typeof document !== "undefined" && document.startViewTransition) {
+        document.startViewTransition(() => {
+          updateVisuals();
+          return new Promise((resolve) => setTimeout(resolve, 15));
+        });
+      } else {
+        updateVisuals();
+      }
 
       if (open) {
         const group = sections.find((c) => c.key === key);
@@ -1297,7 +1309,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         const activeKey = activeCharts[key] ?? group.charts[0]?.key;
         const activeChart = group.charts.find((c) => c.key === activeKey);
         if (!activeChart) return;
-        requestAnimationFrame(() => renderComponent(key, activeChart));
+
+        setTimeout(() => {
+          requestAnimationFrame(() => renderComponent(key, activeChart));
+        }, 400);
       }
     },
     [activeCharts, renderComponent, sections]
@@ -1348,6 +1363,12 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     },
     [renderComponent]
   );
+
+  const sortedSections = useMemo(() => {
+    const activeSections = sections.filter((cfg) => openKeys.has(cfg.key));
+    const inactiveSections = sections.filter((cfg) => !openKeys.has(cfg.key));
+    return [...activeSections, ...inactiveSections];
+  }, [sections, openKeys]);
 
   return (
     <div className={wrapperClass}>
@@ -1433,7 +1454,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           align-items: start;
         `}
       >
-      {sections.map((cfg) => {
+      {sortedSections.map((cfg) => {
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
         const fallbackKey = visibleCharts[0]?.key ?? "";
@@ -1447,7 +1468,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         <details
           key={cfg.key}
           open={openKeys.has(cfg.key)}
-          onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
+          //onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
+          style={{
+            viewTransitionName: `accordion-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
+          }}
           className={css`
             margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
             border-radius: 12px;
@@ -1457,9 +1481,35 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               0 6px 18px ${ui.cardShadow1},
               0 2px 6px ${ui.cardShadow2};
             overflow: hidden;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            
+
+            &[open] {
+              border-color: ${ui.infoBorder};
+            }
+
+            &[open] summary ~ * {
+              animation: slideDownFade 0.35s ease-out forwards;
+            }
+
+            @keyframes slideDownFade {
+              from {
+                opacity: 0;
+                transform: translateY(-8px);
+              }
+              to {
+                opacity: 1;
+                transform: translateY(0);
+              }
+            }
           `}
         >
           <summary
+            onClick={(e) => {
+              e.preventDefault(); 
+              const isOpen = openKeys.has(cfg.key);
+              onToggle(cfg.key, !isOpen);
+            }}
             className={css`
               cursor: pointer;
               user-select: none;
