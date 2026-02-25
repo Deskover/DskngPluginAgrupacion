@@ -12,10 +12,19 @@ const PLUGIN_ID = "dsknggrafana-deskoverplugin-panel";
 type ChartConfig = {
   key: string;
   title: string;
+  type?: "chart" | "html";
   height?: number;
   option?: echarts.EChartsOption;
   endpoint?: ChartEndpoint;
   code?: string;
+  html?: string;
+  css?: string;
+  js?: string;
+};
+
+type HtmlContent = {
+  html: string;
+  css?: string;
 };
 
 type AccordionConfig = {
@@ -263,6 +272,35 @@ const getThemeModeFromUrl = (search: string): "light" | "dark" => {
   }
 };
 
+const buildUrlScopedVars = (search: string): Record<string, any> => {
+  if (!search) return {};
+  try {
+    const params = new URLSearchParams(search);
+    const next: Record<string, any> = {};
+    params.forEach((value, key) => {
+      const normalizedKey = key.startsWith("var-") ? key.slice(4) : key;
+      if (!normalizedKey) return;
+      const wrapped = { value, text: value };
+      next[normalizedKey] = wrapped;
+      next[`var-${normalizedKey}`] = wrapped;
+    });
+    return next;
+  } catch {
+    return {};
+  }
+};
+
+const mergeScopedVars = (scopedVars?: Record<string, any>, search?: string): Record<string, any> => {
+  const merged: Record<string, any> = { ...(scopedVars ?? {}) };
+  const fromUrl = buildUrlScopedVars(search ?? "");
+  Object.entries(fromUrl).forEach(([key, value]) => {
+    if (merged[key] == null) {
+      merged[key] = value;
+    }
+  });
+  return merged;
+};
+
 const withDarkChartText = (option: any): any => {
   const text = "#f3f4f6";
   const subtle = "rgba(243, 244, 246, 0.78)";
@@ -367,13 +405,23 @@ const safeKey = (rawKey: any, fallbackPrefix: string, index: number, title?: any
 const normalizeChart = (raw: any, chartIndex: number, sectionKey: string): ChartConfig => {
   const title = raw.title ?? raw.titulo ?? "";
   const key = safeKey(raw.key ?? raw.clave, `${sectionKey}_chart`, chartIndex, title);
+  const typeRaw = String(
+    raw.type ?? raw.tipo ?? raw.componentType ?? raw.componente ?? raw.component ?? "chart"
+  )
+    .trim()
+    .toLowerCase();
+  const normalizedType = typeRaw === "html" || typeRaw === "table" || typeRaw === "tabla" ? "html" : "chart";
   return {
     key,
     title,
+    type: normalizedType,
     height: raw.height ?? raw.altura,
     option: raw.option ?? raw.opcion,
     endpoint: normalizeEndpoint(raw.endpoint ?? raw.puntoFinal ?? raw.endpointConfig ?? raw.conexion ?? raw.refId),
     code: raw.code ?? raw.codigo ?? raw.funcion,
+    html: raw.html ?? raw.contenidoHtml ?? raw.template ?? raw.plantilla ?? "",
+    css: raw.css ?? raw.estilos ?? "",
+    js: raw.js ?? raw.script ?? "",
   };
 };
 
@@ -625,13 +673,17 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           },
     [isLightTheme]
   );
+  const effectiveScopedVars = useMemo(
+    () => mergeScopedVars(data?.request?.scopedVars, urlSearch),
+    [data?.request?.scopedVars, urlSearch]
+  );
   const scopedVarsKey = useMemo(() => {
     try {
-      return JSON.stringify(data?.request?.scopedVars ?? {});
+      return JSON.stringify(effectiveScopedVars);
     } catch {
       return "";
     }
-  }, [data?.request?.scopedVars]);
+  }, [effectiveScopedVars]);
   const varsFingerprint = `${scopedVarsKey}|${urlSearch}`;
   const [stabilizedVarsFingerprint, setStabilizedVarsFingerprint] = useState<string>(varsFingerprint);
   const isWaitingVars = varsFingerprint !== stabilizedVarsFingerprint;
@@ -667,8 +719,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const domRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const optionCacheRef = useRef<Record<string, echarts.EChartsOption | null>>({});
   const inFlightRef = useRef<Record<string, Promise<echarts.EChartsOption | null> | null>>({});
+  const htmlCacheRef = useRef<Record<string, HtmlContent | null>>({});
+  const htmlInFlightRef = useRef<Record<string, Promise<HtmlContent | null> | null>>({});
   const errorCacheRef = useRef<Record<string, number>>({});
   const scopedVarsVersionRef = useRef(0);
+  const [htmlContents, setHtmlContents] = useState<Record<string, HtmlContent>>({});
 
   useEffect(() => {
     return () => {
@@ -750,12 +805,18 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   useEffect(() => {
     optionCacheRef.current = {};
     inFlightRef.current = {};
+    htmlCacheRef.current = {};
+    htmlInFlightRef.current = {};
+    setHtmlContents({});
   }, [panelConfig]);
 
   useEffect(() => {
     scopedVarsVersionRef.current += 1;
     optionCacheRef.current = {};
     inFlightRef.current = {};
+    htmlCacheRef.current = {};
+    htmlInFlightRef.current = {};
+    setHtmlContents({});
   }, [stabilizedVarsFingerprint]);
 
   useEffect(() => {
@@ -771,7 +832,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       try {
         setIsRemoteConfigLoading(true);
         setRemoteConfigError(null);
-        const endpointUrl = replaceVars(configEndpoint, data?.request?.scopedVars);
+        const endpointUrl = replaceVars(configEndpoint, effectiveScopedVars);
         const response = await fetch(endpointUrl);
         if (!response.ok) {
           throw new Error(`Error HTTP ${response.status} al consultar ${endpointUrl}`);
@@ -801,7 +862,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     return () => {
       isCancelled = true;
     };
-  }, [configEndpoint, stabilizedVarsFingerprint]);
+  }, [configEndpoint, effectiveScopedVars, stabilizedVarsFingerprint]);
 
   const wrapperClass = useMemo(
     () => css`
@@ -841,7 +902,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
   const handleBarSelection = useCallback(
     (name: string) => {
-      const scopedVars = data?.request?.scopedVars;
+      const scopedVars = effectiveScopedVars;
       const selectedValue = replaceVars("${seleccion_valor}", scopedVars).trim();
       const resolvedDataset = replaceVars("${estadosquaker}", scopedVars);
       const datasetValue = resolvedDataset && resolvedDataset !== "${estadosquaker}" ? resolvedDataset : "estadosquaker";
@@ -881,7 +942,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         true
       );
     },
-    [data?.request?.scopedVars]
+    [effectiveScopedVars]
   );
 
   const ensureChart = useCallback(
@@ -949,7 +1010,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
   const fetchChartData = useCallback(async (endpoint?: ChartEndpoint) => {
     if (!endpoint) return null;
-    const scopedVars = data?.request?.scopedVars;
+    const scopedVars = effectiveScopedVars;
     if (endpoint.refId) {
       const series = data?.series ?? [];
       const matches = series.filter((frame) => frame.refId === endpoint.refId);
@@ -984,7 +1045,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       return response.json();
     }
     return response.text();
-  }, [data?.request?.scopedVars, data?.series, stabilizedVarsFingerprint]);
+  }, [data?.series, effectiveScopedVars, stabilizedVarsFingerprint]);
 
   const buildOptionFromCode = useCallback((code: string, payload: unknown, vars: Record<string, unknown>) => {
     try {
@@ -995,6 +1056,106 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       return null;
     }
   }, []);
+
+  const buildHtmlFromCode = useCallback(
+    (jsCode: string, payload: unknown, vars: Record<string, unknown>, baseHtml?: string, baseCss?: string) => {
+      try {
+        const fn = new Function("data", "vars", "baseHtml", "baseCss", jsCode);
+        const result = fn(payload, vars, baseHtml ?? "", baseCss ?? "");
+        if (typeof result === "string") {
+          return { html: result, css: baseCss ?? "" } as HtmlContent;
+        }
+        if (result && typeof result === "object") {
+          const html = String((result as any).html ?? baseHtml ?? "");
+          const cssText = String((result as any).css ?? baseCss ?? "");
+          return { html, css: cssText } as HtmlContent;
+        }
+        return { html: baseHtml ?? "", css: baseCss ?? "" } as HtmlContent;
+      } catch (error) {
+        console.error("Error ejecutando codigo de componente HTML", error);
+        return null;
+      }
+    },
+    []
+  );
+
+  const getHtmlContent = useCallback(
+    async (groupKey: string, chart: ChartConfig) => {
+      const cacheKey = `${groupKey}::${chart.key}`;
+      const scopedVarsVersionAtStart = scopedVarsVersionRef.current;
+      const errorAt = errorCacheRef.current[cacheKey];
+      if (errorAt && Date.now() - errorAt < 5000) {
+        return null;
+      }
+      const cached = htmlCacheRef.current[cacheKey];
+      if (cached) return cached;
+      const inflight = htmlInFlightRef.current[cacheKey];
+      if (inflight) return inflight;
+
+      const promise = (async () => {
+        if (chart.endpoint) {
+          setLoadingCharts((prev) => ({ ...prev, [cacheKey]: true }));
+        }
+        try {
+          let payload: unknown = data;
+          if (chart.endpoint) {
+            payload = await fetchChartData(chart.endpoint);
+          }
+
+          const jsCode = (chart.js ?? chart.code ?? "").trim();
+          let content: HtmlContent | null = null;
+          if (jsCode) {
+            content = buildHtmlFromCode(jsCode, payload, {
+              scopedVars: effectiveScopedVars,
+              grafanaData: data,
+              refId: chart.endpoint?.refId,
+            }, chart.html ?? "", chart.css ?? "");
+            if (!content) {
+              throw new Error("La funcion del componente HTML no retorno contenido valido.");
+            }
+          } else {
+            content = { html: chart.html ?? "", css: chart.css ?? "" };
+          }
+
+          if (scopedVarsVersionRef.current !== scopedVarsVersionAtStart) {
+            return null;
+          }
+          htmlCacheRef.current[cacheKey] = content;
+          setHtmlContents((prev) => ({ ...prev, [cacheKey]: content as HtmlContent }));
+          setChartErrors((prev) => {
+            if (!prev[cacheKey]) return prev;
+            const next = { ...prev };
+            delete next[cacheKey];
+            return next;
+          });
+          return content;
+        } catch (error) {
+          if (scopedVarsVersionRef.current !== scopedVarsVersionAtStart) {
+            return null;
+          }
+          const message = error instanceof Error ? error.message : "Error al cargar componente HTML";
+          setChartErrors((prev) => ({ ...prev, [cacheKey]: message }));
+          errorCacheRef.current[cacheKey] = Date.now();
+          return null;
+        } finally {
+          if (chart.endpoint) {
+            setLoadingCharts((prev) => {
+              if (!prev[cacheKey]) return prev;
+              const next = { ...prev };
+              delete next[cacheKey];
+              return next;
+            });
+          }
+        }
+      })();
+
+      htmlInFlightRef.current[cacheKey] = promise;
+      const result = await promise;
+      htmlInFlightRef.current[cacheKey] = null;
+      return result;
+    },
+    [buildHtmlFromCode, data, effectiveScopedVars, fetchChartData]
+  );
 
   const getChartOption = useCallback(
     async (groupKey: string, chart: ChartConfig) => {
@@ -1023,7 +1184,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           if (chart.code) {
             option = buildOptionFromCode(chart.code, payload, {
               baseOption: chart.option ?? null,
-              scopedVars: data?.request?.scopedVars ?? {},
+              scopedVars: effectiveScopedVars,
               refId: chart.endpoint?.refId,
             });
             if (!option) {
@@ -1072,7 +1233,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       inFlightRef.current[cacheKey] = null;
       return result;
     },
-    [buildOptionFromCode, fetchChartData]
+    [buildOptionFromCode, effectiveScopedVars, fetchChartData]
   );
 
   const renderChart = useCallback(
@@ -1082,6 +1243,22 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       ensureChart(groupKey, option);
     },
     [ensureChart, getChartOption]
+  );
+
+  const renderComponent = useCallback(
+    async (groupKey: string, chart: ChartConfig) => {
+      if (chart.type === "html") {
+        const existing = chartInstancesRef.current[groupKey];
+        if (existing && !existing.isDisposed?.()) {
+          existing.dispose();
+          chartInstancesRef.current[groupKey] = null;
+        }
+        await getHtmlContent(groupKey, chart);
+        return;
+      }
+      await renderChart(groupKey, chart);
+    },
+    [getHtmlContent, renderChart]
   );
 
   useEffect(() => {
@@ -1097,10 +1274,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       const activeChart = group.charts.find((c) => c.key === activeKey);
       if (!activeChart) return;
       requestAnimationFrame(() => {
-        renderChart(group.key, activeChart);
+        renderComponent(group.key, activeChart);
       });
     });
-  }, [activeCharts, openKeys, renderChart, sections]);
+  }, [activeCharts, openKeys, renderComponent, sections]);
 
   const onToggle = useCallback(
     (key: string, open: boolean) => {
@@ -1120,10 +1297,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         const activeKey = activeCharts[key] ?? group.charts[0]?.key;
         const activeChart = group.charts.find((c) => c.key === activeKey);
         if (!activeChart) return;
-        requestAnimationFrame(() => renderChart(key, activeChart));
+        requestAnimationFrame(() => renderComponent(key, activeChart));
       }
     },
-    [activeCharts, renderChart, sections]
+    [activeCharts, renderComponent, sections]
   );
 
   const onSwitchChart = useCallback(
@@ -1132,9 +1309,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       const group = sections.find((c) => c.key === groupKey);
       const activeChart = group?.charts.find((c) => c.key === chartKey);
       if (!activeChart) return;
-      requestAnimationFrame(() => renderChart(groupKey, activeChart));
+      requestAnimationFrame(() => renderComponent(groupKey, activeChart));
     },
-    [renderChart, sections]
+    [renderComponent, sections]
   );
 
   const onRemoveChart = useCallback(
@@ -1161,12 +1338,15 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
   const makeChartRef = useCallback(
     (groupKey: string, chart: ChartConfig) => (node: HTMLDivElement | null) => {
+      if (chart.type === "html") {
+        return;
+      }
       if (node) {
         domRefs.current[groupKey] = node;
-        requestAnimationFrame(() => renderChart(groupKey, chart));
+        requestAnimationFrame(() => renderComponent(groupKey, chart));
       }
     },
-    [renderChart]
+    [renderComponent]
   );
 
   return (
@@ -1261,6 +1441,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         const activeChart = visibleCharts.find((c) => c.key === activeKey) ?? visibleCharts[0];
         const errorKey = activeChart ? `${cfg.key}::${activeChart.key}` : "";
         const chartError = errorKey ? chartErrors[errorKey] : null;
+        const htmlContent = errorKey ? htmlContents[errorKey] : undefined;
         const chartLoading = (errorKey ? Boolean(loadingCharts[errorKey]) : false) || isWaitingVars;
         return (
         <details
@@ -1300,7 +1481,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                 </span>
               )}
             </span>
-            <span className={css`font-size: 12px; opacity: 0.8;`}>Ver grafica</span>
+            <span className={css`font-size: 12px; opacity: 0.8;`}>Ver componente</span>
           </summary>
 
           {visibleCharts.length > 1 && (
@@ -1385,17 +1566,36 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               padding: 10px 12px 16px;
             `}
           >
-            <div
-              ref={activeChart ? makeChartRef(cfg.key, activeChart) : undefined}
-              style={{
-                width: "100%",
-                height: activeChart?.height ?? 280,
-                opacity: chartLoading ? 0.45 : 1,
-                filter: chartLoading ? "blur(1.25px)" : "blur(0px)",
-                transform: chartLoading ? "scale(0.995)" : "scale(1)",
-                transition: "opacity 240ms ease, filter 260ms ease, transform 260ms ease",
-              }}
-            />
+            {activeChart?.type === "html" ? (
+              <div
+                key={`${cfg.key}:${activeChart?.key ?? "none"}:html`}
+                style={{
+                  width: "100%",
+                  minHeight: activeChart?.height ?? 280,
+                  opacity: chartLoading ? 0.45 : 1,
+                  filter: chartLoading ? "blur(1.25px)" : "blur(0px)",
+                  transform: chartLoading ? "scale(0.995)" : "scale(1)",
+                  transition: "opacity 240ms ease, filter 260ms ease, transform 260ms ease",
+                  overflowX: "auto",
+                }}
+              >
+                {htmlContent?.css && <style>{htmlContent.css}</style>}
+                <div dangerouslySetInnerHTML={{ __html: htmlContent?.html ?? activeChart?.html ?? "" }} />
+              </div>
+            ) : (
+              <div
+                key={`${cfg.key}:${activeChart?.key ?? "none"}:chart`}
+                ref={activeChart ? makeChartRef(cfg.key, activeChart) : undefined}
+                style={{
+                  width: "100%",
+                  height: activeChart?.height ?? 280,
+                  opacity: chartLoading ? 0.45 : 1,
+                  filter: chartLoading ? "blur(1.25px)" : "blur(0px)",
+                  transform: chartLoading ? "scale(0.995)" : "scale(1)",
+                  transition: "opacity 240ms ease, filter 260ms ease, transform 260ms ease",
+                }}
+              />
+            )}
             <div
               className={css`
                 position: absolute;

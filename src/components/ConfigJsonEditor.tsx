@@ -9,11 +9,24 @@ import { SimpleOptions } from 'types';
 
 type Props = PanelOptionsEditorProps<string>;
 
+type ChartType = 'chart' | 'html';
+type CodeKey = 'code' | 'codigo' | 'funcion';
+type HtmlKey = 'html' | 'contenidoHtml' | 'template' | 'plantilla';
+type CssKey = 'css' | 'estilos';
+type JsKey = 'js' | 'script' | CodeKey;
+
 type ChartEntry = {
   id: string;
   label: string;
+  chartType: ChartType;
   code: string;
-  codeKey: 'code' | 'codigo' | 'funcion';
+  codeKey: CodeKey;
+  html: string;
+  htmlKey: HtmlKey;
+  css: string;
+  cssKey: CssKey;
+  js: string;
+  jsKey: JsKey;
   categoryIndex: number;
   sectionIndex: number;
   chartIndex: number;
@@ -23,11 +36,41 @@ type ChartEntry = {
   rootIsArray: boolean;
 };
 
-const getCodeKey = (chart: any): ChartEntry['codeKey'] => {
+const getCodeKey = (chart: any): CodeKey => {
   if (typeof chart?.code === 'string') return 'code';
   if (typeof chart?.codigo === 'string') return 'codigo';
   if (typeof chart?.funcion === 'string') return 'funcion';
   return 'codigo';
+};
+
+const getChartType = (chart: any): ChartType => {
+  const typeRaw = String(chart?.type ?? chart?.tipo ?? chart?.componentType ?? chart?.componente ?? chart?.component ?? 'chart')
+    .trim()
+    .toLowerCase();
+  return typeRaw === 'html' || typeRaw === 'table' || typeRaw === 'tabla' ? 'html' : 'chart';
+};
+
+const getHtmlKey = (chart: any): HtmlKey => {
+  if (typeof chart?.html === 'string') return 'html';
+  if (typeof chart?.contenidoHtml === 'string') return 'contenidoHtml';
+  if (typeof chart?.template === 'string') return 'template';
+  if (typeof chart?.plantilla === 'string') return 'plantilla';
+  return 'html';
+};
+
+const getCssKey = (chart: any): CssKey => {
+  if (typeof chart?.css === 'string') return 'css';
+  if (typeof chart?.estilos === 'string') return 'estilos';
+  return 'css';
+};
+
+const getJsKey = (chart: any): JsKey => {
+  if (typeof chart?.js === 'string') return 'js';
+  if (typeof chart?.script === 'string') return 'script';
+  if (typeof chart?.code === 'string') return 'code';
+  if (typeof chart?.codigo === 'string') return 'codigo';
+  if (typeof chart?.funcion === 'string') return 'funcion';
+  return 'js';
 };
 
 const extractCharts = (parsed: any): ChartEntry[] => {
@@ -56,16 +99,27 @@ const extractCharts = (parsed: any): ChartEntry[] => {
       const charts = section?.[chartsKey];
       if (!Array.isArray(charts)) return;
       charts.forEach((chart, chartIndex) => {
+        const chartType = getChartType(chart);
         const codeKey = getCodeKey(chart);
         const code = chart?.[codeKey] ?? '';
+        const htmlKey = getHtmlKey(chart);
+        const cssKey = getCssKey(chart);
+        const jsKey = getJsKey(chart);
         const label = `${category?.title ?? category?.titulo ?? category?.key ?? category?.clave ?? categoryIndex} / ${
           section?.title ?? section?.titulo ?? section?.key ?? section?.clave ?? sectionIndex
         } / ${chart?.title ?? chart?.titulo ?? chart?.key ?? chart?.clave ?? chartIndex}`;
         entries.push({
           id: `${categoryIndex}.${sectionIndex}.${chartIndex}`,
           label,
+          chartType,
           code,
           codeKey,
+          html: String(chart?.[htmlKey] ?? ''),
+          htmlKey,
+          css: String(chart?.[cssKey] ?? ''),
+          cssKey,
+          js: String(chart?.[jsKey] ?? ''),
+          jsKey,
           categoryIndex,
           sectionIndex,
           chartIndex,
@@ -80,7 +134,7 @@ const extractCharts = (parsed: any): ChartEntry[] => {
   return entries;
 };
 
-const updateChartCode = (parsed: any, entry: ChartEntry, nextCode: string) => {
+const updateChartField = (parsed: any, entry: ChartEntry, field: 'code' | 'html' | 'css' | 'js', nextValue: string) => {
   const clone = JSON.parse(JSON.stringify(parsed));
   const categories = entry.rootIsArray ? clone : clone?.[entry.categoriesKey as string];
   if (!Array.isArray(categories)) return clone;
@@ -94,7 +148,15 @@ const updateChartCode = (parsed: any, entry: ChartEntry, nextCode: string) => {
   if (!Array.isArray(charts)) return clone;
   const chart = charts[entry.chartIndex];
   if (!chart) return clone;
-  chart[entry.codeKey] = nextCode;
+  if (field === 'code') {
+    chart[entry.codeKey] = nextValue;
+  } else if (field === 'html') {
+    chart[entry.htmlKey] = nextValue;
+  } else if (field === 'css') {
+    chart[entry.cssKey] = nextValue;
+  } else {
+    chart[entry.jsKey] = nextValue;
+  }
   return clone;
 };
 
@@ -157,6 +219,8 @@ const resolveUsablePanelConfig = (raw: unknown): any | null => {
 };
 
 export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) => {
+  const [jsonEditorHeight, setJsonEditorHeight] = useState<number>(420);
+  const [codeEditorHeight, setCodeEditorHeight] = useState<number>(340);
   const [localJson, setLocalJson] = useState(value ?? '');
   const [remoteJson, setRemoteJson] = useState<string>('');
   const [remoteError, setRemoteError] = useState<string | null>(null);
@@ -279,7 +343,18 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
   const onCodeChange = useCallback(
     (next?: string) => {
       if (!parsed || !selectedEntry) return;
-      const updated = updateChartCode(parsed, selectedEntry, next ?? '');
+      const updated = updateChartField(parsed, selectedEntry, 'code', next ?? '');
+      const nextJson = JSON.stringify(updated, null, 2);
+      setLocalJson(nextJson);
+      onChange(nextJson);
+    },
+    [onChange, parsed, selectedEntry]
+  );
+
+  const onHtmlFieldChange = useCallback(
+    (field: 'html' | 'css' | 'js', next?: string) => {
+      if (!parsed || !selectedEntry) return;
+      const updated = updateChartField(parsed, selectedEntry, field, next ?? '');
       const nextJson = JSON.stringify(updated, null, 2);
       setLocalJson(nextJson);
       onChange(nextJson);
@@ -291,8 +366,11 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
     if (!parsed || !selectedEntry) return;
     try {
       setCodeError(null);
-      const raw = selectedEntry.code ?? '';
-      const wrapped = `function __chart(data, echarts, vars) {\n${raw}\n}`;
+      const isHtml = selectedEntry.chartType === 'html';
+      const raw = isHtml ? selectedEntry.js ?? '' : selectedEntry.code ?? '';
+      const wrapped = isHtml
+        ? `function __html(data, vars, baseHtml, baseCss) {\n${raw}\n}`
+        : `function __chart(data, echarts, vars) {\n${raw}\n}`;
       const formatted = await prettier.format(wrapped, {
         parser: 'babel',
         plugins: [babel, estree],
@@ -302,18 +380,41 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
       const start = formatted.indexOf('{') + 1;
       const end = formatted.lastIndexOf('}');
       const body = formatted.slice(start, end).replace(/^\s*\n/, '').replace(/\n\s*$/, '');
-      onCodeChange(body);
+      if (isHtml) {
+        onHtmlFieldChange('js', body);
+      } else {
+        onCodeChange(body);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo formatear el codigo';
       setCodeError(message);
     }
-  }, [onCodeChange, parsed, selectedEntry]);
+  }, [onCodeChange, onHtmlFieldChange, parsed, selectedEntry]);
+
+  const adjustJsonHeight = useCallback((delta: number) => {
+    setJsonEditorHeight((prev) => Math.max(240, Math.min(900, prev + delta)));
+  }, []);
+
+  const adjustCodeHeight = useCallback((delta: number) => {
+    setCodeEditorHeight((prev) => Math.max(220, Math.min(900, prev + delta)));
+  }, []);
 
   return (
     <div className={css`display: flex; flex-direction: column; gap: 12px;`}>
+      <div className={css`display: flex; align-items: center; justify-content: flex-end; gap: 8px;`}>
+        <span className={css`font-size: 12px; color: #8ea2bd; min-width: 120px; text-align: right;`}>
+          Alto JSON: {jsonEditorHeight}px
+        </span>
+        <Button size="sm" variant="secondary" onClick={() => adjustJsonHeight(-80)}>
+          -80
+        </Button>
+        <Button size="sm" variant="secondary" onClick={() => adjustJsonHeight(80)}>
+          +80
+        </Button>
+      </div>
       <CodeEditor
         language="json"
-        height="320px"
+        height={`${jsonEditorHeight}px`}
         width="100%"
         value={effectiveJson}
         onBlur={onValueChange}
@@ -339,18 +440,29 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
       <div className={css`display: flex; flex-direction: column; gap: 8px;`}>
         <div className={css`display: flex; align-items: center; justify-content: space-between; gap: 8px;`}>
           <div className={css`font-size: 12px; font-weight: 600; color: #cdd6e3;`}>
-            Editor de codigo de grafica
+            {selectedEntry?.chartType === 'html' ? 'Editor de componente HTML' : 'Editor de codigo de grafica'}
           </div>
-          <Button size="sm" variant="secondary" onClick={onFormatCode} disabled={!selectedEntry}>
-            Formatear codigo
-          </Button>
+          <div className={css`display: flex; align-items: center; gap: 8px;`}>
+            <span className={css`font-size: 12px; color: #8ea2bd; min-width: 125px; text-align: right;`}>
+              Alto codigo: {codeEditorHeight}px
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => adjustCodeHeight(-80)}>
+              -80
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => adjustCodeHeight(80)}>
+              +80
+            </Button>
+            <Button size="sm" variant="secondary" onClick={onFormatCode} disabled={!selectedEntry}>
+              Formatear codigo
+            </Button>
+          </div>
         </div>
         <Select
           options={chartEntries.map((entry) => ({ label: entry.label, value: entry.id }))}
           value={selectedId}
           onChange={(option) => setSelectedId(option?.value ?? '')}
           isClearable
-          placeholder="Selecciona una grafica con codigo"
+          placeholder="Selecciona una grafica o componente"
         />
         {parseError && (
           <div className={css`font-size: 12px; color: #c0392b;`}>
@@ -362,16 +474,54 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
             {codeError}
           </div>
         )}
-        <CodeEditor
-          language="javascript"
-          height="260px"
-          width="100%"
-          value={selectedEntry?.code ?? ''}
-          onBlur={onCodeChange}
-          onSave={onCodeChange}
-          showMiniMap
-          showLineNumbers
-        />
+        {selectedEntry?.chartType === 'html' ? (
+          <div className={css`display: flex; flex-direction: column; gap: 10px;`}>
+            <div className={css`font-size: 12px; font-weight: 600; color: #cdd6e3;`}>HTML</div>
+            <CodeEditor
+              language="html"
+              height={`${codeEditorHeight}px`}
+              width="100%"
+              value={selectedEntry?.html ?? ''}
+              onBlur={(next) => onHtmlFieldChange('html', next)}
+              onSave={(next) => onHtmlFieldChange('html', next)}
+              showMiniMap
+              showLineNumbers
+            />
+            <div className={css`font-size: 12px; font-weight: 600; color: #cdd6e3;`}>CSS</div>
+            <CodeEditor
+              language="css"
+              height={`${codeEditorHeight}px`}
+              width="100%"
+              value={selectedEntry?.css ?? ''}
+              onBlur={(next) => onHtmlFieldChange('css', next)}
+              onSave={(next) => onHtmlFieldChange('css', next)}
+              showMiniMap
+              showLineNumbers
+            />
+            <div className={css`font-size: 12px; font-weight: 600; color: #cdd6e3;`}>JS</div>
+            <CodeEditor
+              language="javascript"
+              height={`${codeEditorHeight}px`}
+              width="100%"
+              value={selectedEntry?.js ?? ''}
+              onBlur={(next) => onHtmlFieldChange('js', next)}
+              onSave={(next) => onHtmlFieldChange('js', next)}
+              showMiniMap
+              showLineNumbers
+            />
+          </div>
+        ) : (
+          <CodeEditor
+            language="javascript"
+            height={`${codeEditorHeight}px`}
+            width="100%"
+            value={selectedEntry?.code ?? ''}
+            onBlur={onCodeChange}
+            onSave={onCodeChange}
+            showMiniMap
+            showLineNumbers
+          />
+        )}
       </div>
     </div>
   );
