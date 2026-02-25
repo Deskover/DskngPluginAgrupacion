@@ -5,6 +5,8 @@ import { css } from '@emotion/css';
 import prettier from 'prettier/standalone';
 import babel from 'prettier/plugins/babel';
 import estree from 'prettier/plugins/estree';
+import htmlPlugin from 'prettier/plugins/html';
+import postcss from 'prettier/plugins/postcss';
 import { SimpleOptions } from 'types';
 
 type Props = PanelOptionsEditorProps<string>;
@@ -367,29 +369,52 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
     try {
       setCodeError(null);
       const isHtml = selectedEntry.chartType === 'html';
-      const raw = isHtml ? selectedEntry.js ?? '' : selectedEntry.code ?? '';
-      const wrapped = isHtml
-        ? `function __html(data, vars, baseHtml, baseCss) {\n${raw}\n}`
-        : `function __chart(data, echarts, vars) {\n${raw}\n}`;
-      const formatted = await prettier.format(wrapped, {
+      if (!isHtml) {
+        const raw = selectedEntry.code ?? '';
+        const wrapped = `function __chart(data, echarts, vars) {\n${raw}\n}`;
+        const formatted = await prettier.format(wrapped, {
+          parser: 'babel',
+          plugins: [babel, estree],
+          semi: true,
+          singleQuote: true,
+        });
+        const start = formatted.indexOf('{') + 1;
+        const end = formatted.lastIndexOf('}');
+        const body = formatted.slice(start, end).replace(/^\s*\n/, '').replace(/\n\s*$/, '');
+        onCodeChange(body);
+        return;
+      }
+
+      const formattedHtml = await prettier.format(selectedEntry.html ?? '', {
+        parser: 'html',
+        plugins: [htmlPlugin],
+      });
+      const formattedCss = await prettier.format(selectedEntry.css ?? '', {
+        parser: 'css',
+        plugins: [postcss],
+      });
+      const wrappedJs = `function __html(data, vars, baseHtml, baseCss) {\n${selectedEntry.js ?? ''}\n}`;
+      const formattedJs = await prettier.format(wrappedJs, {
         parser: 'babel',
         plugins: [babel, estree],
         semi: true,
         singleQuote: true,
       });
-      const start = formatted.indexOf('{') + 1;
-      const end = formatted.lastIndexOf('}');
-      const body = formatted.slice(start, end).replace(/^\s*\n/, '').replace(/\n\s*$/, '');
-      if (isHtml) {
-        onHtmlFieldChange('js', body);
-      } else {
-        onCodeChange(body);
-      }
+      const jsStart = formattedJs.indexOf('{') + 1;
+      const jsEnd = formattedJs.lastIndexOf('}');
+      const jsBody = formattedJs.slice(jsStart, jsEnd).replace(/^\s*\n/, '').replace(/\n\s*$/, '');
+
+      const withHtml = updateChartField(parsed, selectedEntry, 'html', formattedHtml.trim());
+      const withCss = updateChartField(withHtml, selectedEntry, 'css', formattedCss.trim());
+      const withJs = updateChartField(withCss, selectedEntry, 'js', jsBody);
+      const nextJson = JSON.stringify(withJs, null, 2);
+      setLocalJson(nextJson);
+      onChange(nextJson);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo formatear el codigo';
       setCodeError(message);
     }
-  }, [onCodeChange, onHtmlFieldChange, parsed, selectedEntry]);
+  }, [onChange, onCodeChange, parsed, selectedEntry]);
 
   const adjustJsonHeight = useCallback((delta: number) => {
     setJsonEditorHeight((prev) => Math.max(240, Math.min(900, prev + delta)));
