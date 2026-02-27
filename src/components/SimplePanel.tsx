@@ -889,10 +889,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       }
       width: ${width}px;
       height: ${height}px;
-      overflow: auto;
+      box-sizing: border-box;
+      overflow-y: auto;
+      overflow-x: hidden;
       padding: 12px;
       background: linear-gradient(135deg, ${ui.wrapperBgStart}, ${ui.wrapperBgEnd});
       border-radius: 14px;
+      contain: paint;
     `,
     [height, ui.wrapperBgEnd, ui.wrapperBgStart, width]
   );
@@ -1404,13 +1407,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
         /* 2. View Transition API (aplicará solo a los elementos con nombre único) */
         ::view-transition-group(*) {
-          animation-duration: 0.8s;
+          animation-duration: 0.2s;
           animation-timing-function: ease-in-out;
         }
         
         /* 3. Fallback para navegadores sin View Transition */
         details[open] summary ~ * {
-          animation: slideDownFade 0.35s ease-out forwards;
+          animation: slideDownFade 0.1s ease-out forwards;
         }
         @keyframes slideDownFade {
           from {
@@ -1536,7 +1539,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               0 6px 18px ${ui.cardShadow1},
               0 2px 6px ${ui.cardShadow2};
             overflow: hidden;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             
 
             &[open] {
@@ -1544,7 +1547,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             }
 
             &[open] summary ~ * {
-              animation: slideDownFade 0.35s ease-out forwards;
+              animation: slideDownFade 0.1s ease-out forwards;
             }
 
             @keyframes slideDownFade {
