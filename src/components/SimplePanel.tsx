@@ -1484,9 +1484,24 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   return (
     <div className={wrapperClass}>
       <style>{`
+        /* View Transition API (solo navegadores modernos) */
         ::view-transition-group(*) {
-          animation-duration: 1s; /* Tiempo del movimiento hacia arriba */
+          animation-duration: 0.8s;
           animation-timing-function: ease-in-out;
+        }
+        /* Fallback para navegadores sin View Transition */
+        details[open] summary ~ * {
+          animation: slideDownFade 0.35s ease-out forwards;
+        }
+        @keyframes slideDownFade {
+          from {
+            opacity: 0;
+            transform: translateY(-8px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
       `}</style>
       {categories.length > 1 && (
@@ -1598,7 +1613,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               0 6px 18px ${ui.cardShadow1},
               0 2px 6px ${ui.cardShadow2};
             overflow: hidden;
-            transition: all 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             
 
             &[open] {
@@ -1606,8 +1621,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             }
 
             &[open] summary ~ * {
-              opacity: 0;
-              animation: slideDownFade 1.5s ease-out forwards;
+              animation: slideDownFade 0.35s ease-out forwards;
             }
 
             @keyframes slideDownFade {
