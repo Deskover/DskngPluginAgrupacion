@@ -835,6 +835,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const errorCacheRef = useRef<Record<string, number>>({});
   const scopedVarsVersionRef = useRef(0);
   const [htmlContents, setHtmlContents] = useState<Record<string, HtmlContent>>({});
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return () => {
@@ -999,10 +1000,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       }
       width: ${width}px;
       height: ${height}px;
-      overflow: auto;
+      box-sizing: border-box;
+      overflow-y: auto;
+      overflow-x: hidden;
       padding: 12px;
       background: linear-gradient(135deg, ${ui.wrapperBgStart}, ${ui.wrapperBgEnd});
       border-radius: 14px;
+      contain: paint;
     `,
     [height, ui.wrapperBgEnd, ui.wrapperBgStart, width]
   );
@@ -1158,10 +1162,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     return response.text();
   }, [data?.series, effectiveScopedVars, stabilizedVarsFingerprint]);
 
-  const buildOptionFromCode = useCallback((code: string, payload: unknown, vars: Record<string, unknown>) => {
+  const buildOptionFromCode = useCallback(async (code: string, payload: unknown, vars: Record<string, unknown>) => {
     try {
-      const fn = new Function("data", "echarts", "vars", code);
-      return fn(payload, echarts, vars);
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const fn = new AsyncFunction("data", "echarts", "vars", code);
+      return await fn(payload, echarts, vars);
     } catch (error) {
       console.error("Error ejecutando codigo de grafica", error);
       return null;
@@ -1169,10 +1174,15 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   }, []);
 
   const buildHtmlFromCode = useCallback(
-    (jsCode: string, payload: unknown, vars: Record<string, unknown>, baseHtml?: string, baseCss?: string) => {
+    // Agregamos 'async' aquí
+    async (jsCode: string, payload: unknown, vars: Record<string, unknown>, baseHtml?: string, baseCss?: string) => {
       try {
-        const fn = new Function("data", "vars", "baseHtml", "baseCss", jsCode);
-        const result = fn(payload, vars, baseHtml ?? "", baseCss ?? "");
+        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+        const fn = new AsyncFunction("data", "vars", "baseHtml", "baseCss", jsCode);
+        
+        // Agregamos 'await' aquí
+        const result = await fn(payload, vars, baseHtml ?? "", baseCss ?? "");
+        
         if (typeof result === "string") {
           return { html: result, css: baseCss ?? "" } as HtmlContent;
         }
@@ -1216,7 +1226,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           const jsCode = (chart.js ?? chart.code ?? "").trim();
           let content: HtmlContent | null = null;
           if (jsCode) {
-            content = buildHtmlFromCode(jsCode, payload, {
+            content = await buildHtmlFromCode(jsCode, payload, {
               scopedVars: effectiveScopedVars,
               grafanaData: data,
               refId: chart.endpoint?.refId,
@@ -1293,7 +1303,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           }
 
           if (chart.code) {
-            option = buildOptionFromCode(chart.code, payload, {
+            option = await buildOptionFromCode(chart.code, payload, {
               baseOption: chart.option ?? null,
               scopedVars: effectiveScopedVars,
               refId: chart.endpoint?.refId,
@@ -1406,15 +1416,30 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       };
 
       if (typeof document !== "undefined" && document.startViewTransition) {
-        document.startViewTransition(() => {
+        
+        // 1. ENCENDEMOS LA ANIMACIÓN SOLO EN ESTE PANEL
+        if (wrapperRef.current) {
+          wrapperRef.current.classList.add("panel-is-transitioning");
+        }
+
+        const transition = document.startViewTransition(() => {
           updateVisuals();
           return new Promise((resolve) => setTimeout(resolve, 15));
         });
+
+        // 2. APAGAMOS LA ANIMACIÓN AL TERMINAR EL EFECTO
+        transition.finished.finally(() => {
+          if (wrapperRef.current) {
+            wrapperRef.current.classList.remove("panel-is-transitioning");
+          }
+        });
+
       } else {
         updateVisuals();
       }
 
       if (open) {
+        // ... (El resto de tu lógica de renderComponent se queda exactamente igual) ...
         const group = sections.find((c) => c.key === key);
         if (!group) return;
         const activeKey = activeCharts[key] ?? group.charts[0]?.key;
@@ -1482,16 +1507,24 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   }, [sections, openKeys]);
 
   return (
-    <div className={wrapperClass}>
+    <div ref={wrapperRef} className={wrapperClass}>
       <style>{`
-        /* View Transition API (solo navegadores modernos) */
+        /* 1. APAGAR LA ANIMACIÓN GLOBAL (Evita que otros paneles de Grafana parpadeen) */
+        ::view-transition-group(root),
+        ::view-transition-old(root),
+        ::view-transition-new(root) {
+          animation: none !important;
+        }
+
+        /* 2. View Transition API (aplicará solo a los elementos con nombre único) */
         ::view-transition-group(*) {
-          animation-duration: 0.8s;
+          animation-duration: 0.2s;
           animation-timing-function: ease-in-out;
         }
-        /* Fallback para navegadores sin View Transition */
+        
+        /* 3. Fallback para navegadores sin View Transition */
         details[open] summary ~ * {
-          animation: slideDownFade 0.35s ease-out forwards;
+          animation: slideDownFade 0.1s ease-out forwards;
         }
         @keyframes slideDownFade {
           from {
@@ -1602,9 +1635,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           open={openKeys.has(cfg.key)}
           //onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
           style={{
-            viewTransitionName: `accordion-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
+            ["--vt-name" as any]: `accordion-panel${id}-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
           }}
           className={css`
+            view-transition-name: none;
+            .panel-is-transitioning & {
+              view-transition-name: var(--vt-name);
+            }
             margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
             border-radius: 12px;
             border: 1px solid ${ui.cardBorder};
@@ -1613,7 +1650,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               0 6px 18px ${ui.cardShadow1},
               0 2px 6px ${ui.cardShadow2};
             overflow: hidden;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             
 
             &[open] {
@@ -1621,7 +1658,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             }
 
             &[open] summary ~ * {
-              animation: slideDownFade 0.35s ease-out forwards;
+              animation: slideDownFade 0.1s ease-out forwards;
             }
 
             @keyframes slideDownFade {
