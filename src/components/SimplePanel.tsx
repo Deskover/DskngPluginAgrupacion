@@ -1497,7 +1497,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           open={openKeys.has(cfg.key)}
           //onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
           style={{
-            viewTransitionName: `accordion-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
+            viewTransitionName: `accordion-panel${id}-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
           }}
           className={css`
             margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
