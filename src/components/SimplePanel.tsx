@@ -724,6 +724,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const errorCacheRef = useRef<Record<string, number>>({});
   const scopedVarsVersionRef = useRef(0);
   const [htmlContents, setHtmlContents] = useState<Record<string, HtmlContent>>({});
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return () => {
@@ -1301,15 +1302,30 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       };
 
       if (typeof document !== "undefined" && document.startViewTransition) {
-        document.startViewTransition(() => {
+        
+        // 1. ENCENDEMOS LA ANIMACIÓN SOLO EN ESTE PANEL
+        if (wrapperRef.current) {
+          wrapperRef.current.classList.add("panel-is-transitioning");
+        }
+
+        const transition = document.startViewTransition(() => {
           updateVisuals();
           return new Promise((resolve) => setTimeout(resolve, 15));
         });
+
+        // 2. APAGAMOS LA ANIMACIÓN AL TERMINAR EL EFECTO
+        transition.finished.finally(() => {
+          if (wrapperRef.current) {
+            wrapperRef.current.classList.remove("panel-is-transitioning");
+          }
+        });
+
       } else {
         updateVisuals();
       }
 
       if (open) {
+        // ... (El resto de tu lógica de renderComponent se queda exactamente igual) ...
         const group = sections.find((c) => c.key === key);
         if (!group) return;
         const activeKey = activeCharts[key] ?? group.charts[0]?.key;
@@ -1377,7 +1393,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   }, [sections, openKeys]);
 
   return (
-    <div className={wrapperClass}>
+    <div ref={wrapperRef} className={wrapperClass}>
       <style>{`
         /* 1. APAGAR LA ANIMACIÓN GLOBAL (Evita que otros paneles de Grafana parpadeen) */
         ::view-transition-group(root),
@@ -1505,9 +1521,13 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           open={openKeys.has(cfg.key)}
           //onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
           style={{
-            viewTransitionName: `accordion-panel${id}-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
+            ["--vt-name" as any]: `accordion-panel${id}-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
           }}
           className={css`
+            view-transition-name: none;
+            .panel-is-transitioning & {
+              view-transition-name: var(--vt-name);
+            }
             margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
             border-radius: 12px;
             border: 1px solid ${ui.cardBorder};
