@@ -1379,12 +1379,20 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   return (
     <div className={wrapperClass}>
       <style>{`
-        /* View Transition API (solo navegadores modernos) */
+        /* 1. APAGAR LA ANIMACIÓN GLOBAL (Evita que otros paneles de Grafana parpadeen) */
+        ::view-transition-group(root),
+        ::view-transition-old(root),
+        ::view-transition-new(root) {
+          animation: none !important;
+        }
+
+        /* 2. View Transition API (aplicará solo a los elementos con nombre único) */
         ::view-transition-group(*) {
           animation-duration: 0.8s;
           animation-timing-function: ease-in-out;
         }
-        /* Fallback para navegadores sin View Transition */
+        
+        /* 3. Fallback para navegadores sin View Transition */
         details[open] summary ~ * {
           animation: slideDownFade 0.35s ease-out forwards;
         }
