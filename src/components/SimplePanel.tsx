@@ -1047,10 +1047,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     return response.text();
   }, [data?.series, effectiveScopedVars, stabilizedVarsFingerprint]);
 
-  const buildOptionFromCode = useCallback((code: string, payload: unknown, vars: Record<string, unknown>) => {
+  const buildOptionFromCode = useCallback(async (code: string, payload: unknown, vars: Record<string, unknown>) => {
     try {
-      const fn = new Function("data", "echarts", "vars", code);
-      return fn(payload, echarts, vars);
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const fn = new AsyncFunction("data", "echarts", "vars", code);
+      return await fn(payload, echarts, vars);
     } catch (error) {
       console.error("Error ejecutando codigo de grafica", error);
       return null;
@@ -1058,10 +1059,15 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   }, []);
 
   const buildHtmlFromCode = useCallback(
-    (jsCode: string, payload: unknown, vars: Record<string, unknown>, baseHtml?: string, baseCss?: string) => {
+    // Agregamos 'async' aquí
+    async (jsCode: string, payload: unknown, vars: Record<string, unknown>, baseHtml?: string, baseCss?: string) => {
       try {
-        const fn = new Function("data", "vars", "baseHtml", "baseCss", jsCode);
-        const result = fn(payload, vars, baseHtml ?? "", baseCss ?? "");
+        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+        const fn = new AsyncFunction("data", "vars", "baseHtml", "baseCss", jsCode);
+        
+        // Agregamos 'await' aquí
+        const result = await fn(payload, vars, baseHtml ?? "", baseCss ?? "");
+        
         if (typeof result === "string") {
           return { html: result, css: baseCss ?? "" } as HtmlContent;
         }
@@ -1105,7 +1111,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           const jsCode = (chart.js ?? chart.code ?? "").trim();
           let content: HtmlContent | null = null;
           if (jsCode) {
-            content = buildHtmlFromCode(jsCode, payload, {
+            content = await buildHtmlFromCode(jsCode, payload, {
               scopedVars: effectiveScopedVars,
               grafanaData: data,
               refId: chart.endpoint?.refId,
@@ -1182,7 +1188,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           }
 
           if (chart.code) {
-            option = buildOptionFromCode(chart.code, payload, {
+            option = await buildOptionFromCode(chart.code, payload, {
               baseOption: chart.option ?? null,
               scopedVars: effectiveScopedVars,
               refId: chart.endpoint?.refId,
