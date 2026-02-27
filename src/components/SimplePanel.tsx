@@ -491,6 +491,109 @@ const replaceVars = (value: string, scopedVars?: Record<string, any>, format?: s
   return getTemplateSrv().replace(value, scopedVars, format);
 };
 
+const extractSingleTemplateVar = (value: string): { name: string; format?: string } | null => {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^\$\{\s*([a-zA-Z0-9_-]+)\s*(?::\s*([^}]+)\s*)?\}$/);
+  if (!match) return null;
+  const name = (match[1] ?? "").trim();
+  const format = (match[2] ?? "").trim();
+  if (!name) return null;
+  return { name, format: format || undefined };
+};
+
+const parseCsvLikeList = (value: string): string[] => {
+  return value
+    .split(",")
+    .map((item) => item.trim().replace(/^['"]|['"]$/g, ""))
+    .filter((item) => item.length > 0);
+};
+
+const resolveVariableValuesFromTemplateSrv = (varName: string): any[] => {
+  try {
+    const templateSrv: any = getTemplateSrv();
+    const variables: any[] = templateSrv?.getVariables?.() ?? [];
+    const target = variables.find(
+      (item) => String(item?.name ?? "").toLowerCase() === varName.toLowerCase()
+    );
+    if (!target) return [];
+
+    const fromOptions = Array.isArray(target.options)
+      ? target.options
+          .map((opt: any) => opt?.value)
+          .filter((value: any) => {
+            const asText = String(value ?? "");
+            return asText !== "" && asText !== "$__all" && asText.toLowerCase() !== "all";
+          })
+      : [];
+    if (fromOptions.length > 0) return fromOptions;
+
+    const currentValue = target?.current?.value;
+    if (Array.isArray(currentValue)) {
+      return currentValue.filter((value) => String(value ?? "") !== "$__all");
+    }
+
+    return [];
+  } catch {
+    return [];
+  }
+};
+
+const resolveAllTokenFromTemplate = (template: string, scopedVars?: Record<string, any>): any => {
+  const templateVar =
+    extractSingleTemplateVar(template) ??
+    (() => {
+      const match = template.match(/\$\{\s*([a-zA-Z0-9_-]+)\s*(?::\s*([^}]+)\s*)?\}/);
+      if (!match) return null;
+      const name = String(match[1] ?? "").trim();
+      const format = String(match[2] ?? "").trim();
+      if (!name) return null;
+      return { name, format: format || undefined };
+    })();
+  if (!templateVar) return "$__all";
+
+  const scoped = scopedVars?.[templateVar.name] ?? scopedVars?.[`var-${templateVar.name}`];
+  const scopedValue = scoped?.value;
+  if (Array.isArray(scopedValue)) {
+    const cleaned = scopedValue.filter((item) => String(item) !== "$__all");
+    if (cleaned.length > 0) return cleaned;
+  }
+  if (typeof scopedValue === "string" && scopedValue !== "$__all") {
+    return scopedValue;
+  }
+
+  const fromTemplateSrv = resolveVariableValuesFromTemplateSrv(templateVar.name);
+  if (fromTemplateSrv.length > 0) {
+    return fromTemplateSrv;
+  }
+
+  const csvTemplate = `\${${templateVar.name}:csv}`;
+  const csvResolved = replaceVars(csvTemplate, scopedVars);
+  if (typeof csvResolved === "string") {
+    const trimmed = csvResolved.trim();
+    if (trimmed && trimmed !== "$__all") {
+      const parsed = parseCsvLikeList(trimmed);
+      if (parsed.length > 0) return parsed;
+    }
+  }
+
+  return "$__all";
+};
+
+const isAllLikeToken = (value: any): boolean => {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized === "$__all" || normalized === "all";
+};
+
+const containsAllLikeToken = (value: any): boolean => {
+  if (isAllLikeToken(value)) return true;
+  if (Array.isArray(value)) {
+    return value.some((item) => isAllLikeToken(item));
+  }
+  return false;
+};
+
 const normalizeJsonValue = (value: any): any => {
   if (Array.isArray(value)) {
     const next = value.map((item) => normalizeJsonValue(item));
@@ -513,8 +616,16 @@ const deepReplace = (value: any, scopedVars?: Record<string, any>, format?: stri
   if (typeof value === "string") {
     const replaced = replaceVars(value, scopedVars, format);
     if (format === "json" && typeof replaced === "string") {
+      const trimmed = replaced.trim();
+      if (trimmed === "$__all") {
+        return resolveAllTokenFromTemplate(value, scopedVars);
+      }
       try {
-        return normalizeJsonValue(JSON.parse(replaced));
+        const parsed = normalizeJsonValue(JSON.parse(replaced));
+        if (containsAllLikeToken(parsed)) {
+          return resolveAllTokenFromTemplate(value, scopedVars);
+        }
+        return parsed;
       } catch {
         return replaced;
       }
