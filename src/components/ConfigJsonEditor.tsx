@@ -371,7 +371,7 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
       const isHtml = selectedEntry.chartType === 'html';
       if (!isHtml) {
         const raw = selectedEntry.code ?? '';
-        const wrapped = `function __chart(data, echarts, vars) {\n${raw}\n}`;
+        const wrapped = `function __chart(data, echarts, vars, context) {\n${raw}\n}`;
         const formatted = await prettier.format(wrapped, {
           parser: 'babel',
           plugins: [babel, estree],

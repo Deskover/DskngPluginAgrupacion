@@ -56,6 +56,9 @@ type ChartEndpoint = {
   proxyPath?: string;
 };
 
+type ChartEventHandler = (params: any) => void;
+type ChartEventRegistry = Record<string, ChartEventHandler[]>;
+
 const chartsConfigAbstencionismo: AccordionConfig[] = [
   {
     key: "abst_nacional",
@@ -383,6 +386,34 @@ const normalizeEndpoint = (raw?: any): ChartEndpoint | undefined => {
     useProxy,
     proxyPath,
   };
+};
+
+const payloadToEditorDataset = (payload: unknown): any => {
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, any>;
+    if (record.dataset) return record.dataset;
+    if (record.source) return { source: record.source };
+    if (record.data && typeof record.data === "object") {
+      const nested = record.data as Record<string, any>;
+      if (nested.dataset) return nested.dataset;
+      if (nested.source) return { source: nested.source };
+    }
+    if (Array.isArray(record.data)) return { source: record.data };
+  }
+  if (Array.isArray(payload)) return { source: payload };
+  return { source: [] };
+};
+
+const payloadToEditorSeries = (payload: unknown): any[] => {
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, any>;
+    if (Array.isArray(record.series)) return record.series;
+    if (record.data && typeof record.data === "object") {
+      const nested = record.data as Record<string, any>;
+      if (Array.isArray(nested.series)) return nested.series;
+    }
+  }
+  return [];
 };
 
 const slugPart = (value: any): string => {
@@ -830,6 +861,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const domRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const optionCacheRef = useRef<Record<string, echarts.EChartsOption | null>>({});
   const inFlightRef = useRef<Record<string, Promise<echarts.EChartsOption | null> | null>>({});
+  const chartEventHandlersRef = useRef<Record<string, ChartEventRegistry>>({});
+  const attachedChartEventsRef = useRef<Record<string, Set<string>>>({});
   const htmlCacheRef = useRef<Record<string, HtmlContent | null>>({});
   const htmlInFlightRef = useRef<Record<string, Promise<HtmlContent | null> | null>>({});
   const errorCacheRef = useRef<Record<string, number>>({});
@@ -898,6 +931,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   useEffect(() => {
     Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
     chartInstancesRef.current = {};
+    attachedChartEventsRef.current = {};
     domRefs.current = {};
     setLoadingCharts({});
     const initialOpen = new Set<string>();
@@ -916,6 +950,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   useEffect(() => {
     optionCacheRef.current = {};
     inFlightRef.current = {};
+    chartEventHandlersRef.current = {};
+    attachedChartEventsRef.current = {};
     htmlCacheRef.current = {};
     htmlInFlightRef.current = {};
     setHtmlContents({});
@@ -925,6 +961,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     scopedVarsVersionRef.current += 1;
     optionCacheRef.current = {};
     inFlightRef.current = {};
+    chartEventHandlersRef.current = {};
+    attachedChartEventsRef.current = {};
     htmlCacheRef.current = {};
     htmlInFlightRef.current = {};
     setHtmlContents({});
@@ -1011,53 +1049,49 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     setSelectedCategory(category);
   }, []);
 
-  const handleBarSelection = useCallback(
-    (name: string) => {
-      const scopedVars = effectiveScopedVars;
-      const selectedValue = replaceVars("${seleccion_valor}", scopedVars).trim();
-      const resolvedDataset = replaceVars("${estadosquaker}", scopedVars);
-      const datasetValue = resolvedDataset && resolvedDataset !== "${estadosquaker}" ? resolvedDataset : "estadosquaker";
-
-      locationService.partial(
-        { "var-geomap_wms_spatial_filter_geometry": "POLYGON((-180 -90,180 -90,180 90,-180 90,-180 -90))" },
-        true
-      );
-
-      if (selectedValue !== name) {
-        if (typeof window !== "undefined") {
-          sessionStorage.setItem("entidad", name);
-          sessionStorage.removeItem("zona");
-          sessionStorage.removeItem("municipio");
-        }
-        locationService.partial(
-          {
-            "var-seleccion_atributo": "nomgeo",
-            "var-seleccion_dataset": datasetValue,
-            "var-seleccion_valor": name,
-          },
-          true
-        );
-        return;
-      }
-
-      if (typeof window !== "undefined") {
-        sessionStorage.removeItem("municipio");
-        sessionStorage.removeItem("zona");
-      }
-      locationService.partial(
-        {
-          "var-seleccion_valor": " ",
-          "var-seleccion_atributo": " ",
-          "var-seleccion_dataset": " ",
+  const createChartCodeContext = useCallback(
+    (
+      groupKey: string,
+      payload: unknown,
+      vars: Record<string, unknown>,
+      registerEvent: (eventName: string, handler: ChartEventHandler) => void,
+      clearEvent: (eventName?: string) => void
+    ) => {
+      const chartProxy = {
+        on: registerEvent,
+        off: clearEvent,
+        get _model() {
+          return (chartInstancesRef.current[groupKey] as any)?._model;
         },
-        true
-      );
+        getOption: () => chartInstancesRef.current[groupKey]?.getOption(),
+        resize: () => chartInstancesRef.current[groupKey]?.resize(),
+        dispatchAction: (action: any) => chartInstancesRef.current[groupKey]?.dispatchAction(action),
+        setOption: (...args: any[]) => (chartInstancesRef.current[groupKey] as any)?.setOption(...args),
+      };
+
+      return {
+        data: payload,
+        echarts,
+        vars,
+        editor: {
+          dataset: payloadToEditorDataset(payload),
+          series: payloadToEditorSeries(payload),
+        },
+        grafana: {
+          locationService,
+          scopedVars: effectiveScopedVars,
+          replaceVariables: (value: string, format?: string) => replaceVars(value, effectiveScopedVars, format),
+        },
+        panel: {
+          chart: chartProxy,
+        },
+      };
     },
     [effectiveScopedVars]
   );
 
   const ensureChart = useCallback(
-    (groupKey: string, option: echarts.EChartsOption) => {
+    (groupKey: string, cacheKey: string, option: echarts.EChartsOption) => {
       const el = domRefs.current[groupKey];
       if (!el) return;
 
@@ -1065,7 +1099,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       const w = el.clientWidth;
       const h = el.clientHeight;
       if (w === 0 || h === 0) {
-        requestAnimationFrame(() => ensureChart(groupKey, option));
+        requestAnimationFrame(() => ensureChart(groupKey, cacheKey, option));
         return;
       }
 
@@ -1091,15 +1125,29 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       if (optionWithMotion.animationEasingUpdate == null) optionWithMotion.animationEasingUpdate = "quarticOut";
       const finalOption = isLightTheme ? optionWithMotion : withDarkChartText(optionWithMotion);
       chart.setOption(finalOption, { notMerge: true, lazyUpdate: true });
-      chart.off("click");
-      chart.on("click", (params: any) => {
-        if (params?.componentType !== "series") return;
-        if (!params?.name) return;
-        handleBarSelection(String(params.name));
+
+      const previousEvents = attachedChartEventsRef.current[groupKey] ?? new Set<string>();
+      previousEvents.forEach((eventName) => (chart as any).off(eventName));
+
+      const nextEvents = new Set<string>();
+      const eventHandlers = chartEventHandlersRef.current[cacheKey] ?? {};
+      Object.entries(eventHandlers).forEach(([eventName, handlers]) => {
+        if (handlers.length === 0) return;
+        nextEvents.add(eventName);
+        handlers.forEach((handler) => {
+          (chart as any).on(eventName, (params: any) => {
+            try {
+              handler(params);
+            } catch (error) {
+              console.error(`Error ejecutando handler ${eventName} de grafica`, error);
+            }
+          });
+        });
       });
+      attachedChartEventsRef.current[groupKey] = nextEvents;
       chart.resize();
     },
-    [handleBarSelection, isLightTheme]
+    [isLightTheme]
   );
 
   const buildUrl = (endpoint: ChartEndpoint, scopedVars?: Record<string, any>) => {
@@ -1158,15 +1206,35 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     return response.text();
   }, [data?.series, effectiveScopedVars, stabilizedVarsFingerprint]);
 
-  const buildOptionFromCode = useCallback((code: string, payload: unknown, vars: Record<string, unknown>) => {
-    try {
-      const fn = new Function("data", "echarts", "vars", code);
-      return fn(payload, echarts, vars);
-    } catch (error) {
-      console.error("Error ejecutando codigo de grafica", error);
-      return null;
-    }
-  }, []);
+  const buildOptionFromCode = useCallback(
+    (groupKey: string, cacheKey: string, code: string, payload: unknown, vars: Record<string, unknown>) => {
+      const handlers: ChartEventRegistry = {};
+      const registerEvent = (eventName: string, handler: ChartEventHandler) => {
+        if (typeof eventName !== "string" || typeof handler !== "function") return;
+        handlers[eventName] = [...(handlers[eventName] ?? []), handler];
+      };
+      const clearEvent = (eventName?: string) => {
+        if (!eventName) {
+          Object.keys(handlers).forEach((key) => delete handlers[key]);
+          return;
+        }
+        delete handlers[eventName];
+      };
+
+      try {
+        chartEventHandlersRef.current[cacheKey] = handlers;
+        const context = createChartCodeContext(groupKey, payload, vars, registerEvent, clearEvent);
+        const fn = new Function("data", "echarts", "vars", "context", code);
+        const result = fn(payload, echarts, vars, context);
+        return result;
+      } catch (error) {
+        delete chartEventHandlersRef.current[cacheKey];
+        console.error("Error ejecutando codigo de grafica", error);
+        return null;
+      }
+    },
+    [createChartCodeContext]
+  );
 
   const buildHtmlFromCode = useCallback(
     (jsCode: string, payload: unknown, vars: Record<string, unknown>, baseHtml?: string, baseCss?: string) => {
@@ -1293,7 +1361,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           }
 
           if (chart.code) {
-            option = buildOptionFromCode(chart.code, payload, {
+            option = buildOptionFromCode(groupKey, cacheKey, chart.code, payload, {
               baseOption: chart.option ?? null,
               scopedVars: effectiveScopedVars,
               refId: chart.endpoint?.refId,
@@ -1351,7 +1419,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     async (groupKey: string, chart: ChartConfig) => {
       const option = await getChartOption(groupKey, chart);
       if (!option) return;
-      ensureChart(groupKey, option);
+      ensureChart(groupKey, `${groupKey}::${chart.key}`, option);
     },
     [ensureChart, getChartOption]
   );
