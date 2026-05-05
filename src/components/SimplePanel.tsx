@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelProps } from '@grafana/data';
 import { getTemplateSrv, locationService } from '@grafana/runtime';
+import { Icon, useTheme2 } from '@grafana/ui';
 import { SimpleOptions } from 'types';
 import { css } from '@emotion/css';
 
@@ -265,13 +266,17 @@ const getVarCalculo = (): string => {
 };
 
 const normalizeCalculo = (value: string) => value.trim().toLowerCase();
-const getThemeModeFromUrl = (search: string): "light" | "dark" => {
+const getThemeModeFromUrl = (search: string): "light" | "dark" | null => {
   try {
     const params = new URLSearchParams(search);
-    const raw = params.get("theme") ?? params.get("var-theme") ?? "";
-    return raw.trim().toLowerCase() === "light" ? "light" : "dark";
+    const raw = params.get("theme") ?? params.get("var-theme");
+    const normalized = raw?.trim().toLowerCase();
+    if (normalized === "light" || normalized === "dark") {
+      return normalized;
+    }
+    return null;
   } catch {
-    return "dark";
+    return null;
   }
 };
 
@@ -746,12 +751,13 @@ const parsePanelConfigUnknown = (raw: unknown): ParsedConfig => {
 };
 
 export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fieldConfig, id }) => {
+  const grafanaTheme = useTheme2();
   const [calculo, setCalculo] = useState<string>(() => getVarCalculo());
   const [urlSearch, setUrlSearch] = useState<string>(() =>
     typeof window === "undefined" ? "" : window.location.search
   );
   const themeMode = useMemo(() => getThemeModeFromUrl(urlSearch), [urlSearch]);
-  const isLightTheme = themeMode === "light";
+  const isLightTheme = themeMode ? themeMode === "light" : grafanaTheme.isLight;
   const ui = useMemo(
     () =>
       isLightTheme
@@ -775,8 +781,12 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardBg: "#ffffff",
             cardShadow1: "rgba(18, 38, 63, 0.08)",
             cardShadow2: "rgba(18, 38, 63, 0.06)",
-            summaryBg: "linear-gradient(90deg, #1f2d3d 0%, #2c3e50 100%)",
-            summaryText: "#f7fbff",
+            summaryBg: `linear-gradient(90deg, ${grafanaTheme.colors.background.secondary} 0%, ${grafanaTheme.colors.background.primary} 100%)`,
+            summaryHoverBg: grafanaTheme.colors.action.hover,
+            summaryText: grafanaTheme.colors.text.primary,
+            summaryMetaText: grafanaTheme.colors.text.secondary,
+            summaryChevronBg: grafanaTheme.colors.action.selected,
+            summaryChevronBorder: grafanaTheme.colors.border.weak,
             chipXActiveBg: "rgba(255, 255, 255, 0.2)",
             chipXBg: "rgba(31, 45, 61, 0.12)",
             overlayBg: "rgba(240, 245, 250, 0.72)",
@@ -805,7 +815,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardShadow1: "rgba(0, 0, 0, 0.52)",
             cardShadow2: "rgba(0, 0, 0, 0.34)",
             summaryBg: "linear-gradient(90deg, #20242c 0%, #2b313a 100%)",
+            summaryHoverBg: "rgba(48, 54, 64, 0.98)",
             summaryText: "#f9fafb",
+            summaryMetaText: "rgba(249, 250, 251, 0.74)",
+            summaryChevronBg: "rgba(249, 250, 251, 0.12)",
+            summaryChevronBorder: "rgba(249, 250, 251, 0.2)",
             chipXActiveBg: "rgba(17, 24, 39, 0.35)",
             chipXBg: "rgba(229, 231, 235, 0.20)",
             overlayBg: "rgba(22, 25, 30, 0.74)",
@@ -813,7 +827,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             loaderWord: "rgba(249, 250, 251, 0.97)",
             loaderDot: "#f3f4f6",
           },
-    [isLightTheme]
+    [grafanaTheme, isLightTheme]
   );
   const effectiveScopedVars = useMemo(
     () => mergeScopedVars(data?.request?.scopedVars, urlSearch),
@@ -1634,6 +1648,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         `}
       >
       {sortedSections.map((cfg) => {
+        const isOpen = openKeys.has(cfg.key);
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
         const fallbackKey = visibleCharts[0]?.key ?? "";
@@ -1646,7 +1661,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         return (
         <details
           key={cfg.key}
-          open={openKeys.has(cfg.key)}
+          open={isOpen}
           //onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
           style={{
             viewTransitionName: `accordion-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
@@ -1700,17 +1715,54 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               gap: 10px;
               background: ${ui.summaryBg};
               color: ${ui.summaryText};
+              list-style: none;
+              transition: background 180ms ease, color 180ms ease;
+
+              &::-webkit-details-marker {
+                display: none;
+              }
+
+              &:hover {
+                background: ${ui.summaryHoverBg};
+              }
             `}
           >
             <span className={css`display: flex; flex-direction: column; gap: 2px;`}>
               <span className={css`font-size: 14px;`}>{cfg.title}</span>
               {cfg.subtitle && (
-                <span className={css`font-size: 12px; font-weight: 500; opacity: 0.8;`}>
+                <span className={css`font-size: 12px; font-weight: 500; color: ${ui.summaryMetaText};`}>
                   {cfg.subtitle}
                 </span>
               )}
             </span>
-            <span className={css`font-size: 12px; opacity: 0.8;`}>Ver componente</span>
+            <span
+              className={css`
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                flex-shrink: 0;
+                font-size: 12px;
+                font-weight: 600;
+                color: ${ui.summaryMetaText};
+              `}
+            >
+              {isOpen ? "Cerrar" : "Mostrar"}
+              <span
+                className={css`
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  width: 24px;
+                  height: 24px;
+                  border-radius: 50%;
+                  border: 1px solid ${ui.summaryChevronBorder};
+                  background: ${ui.summaryChevronBg};
+                  color: ${ui.summaryText};
+                `}
+              >
+                <Icon name={isOpen ? "angle-up" : "angle-down"} size="md" />
+              </span>
+            </span>
           </summary>
 
           {visibleCharts.length > 1 && (
