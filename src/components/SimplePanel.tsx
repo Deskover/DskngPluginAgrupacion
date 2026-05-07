@@ -9,6 +9,7 @@ import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
 
 const PLUGIN_ID = "dsknggrafana-deskoverplugin-panel";
+const ACCENT_RGB = "52, 222, 154";
 
 type ChartConfig = {
   key: string;
@@ -768,9 +769,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             toolbarBorder: "rgba(31, 45, 61, 0.12)",
             toolbarShadow: "rgba(18, 38, 63, 0.06)",
             textPrimary: "#1f2d3d",
-            chipActiveBorder: "#1f2d3d",
-            chipActiveBg: "#1f2d3d",
-            chipActiveText: "#ffffff",
+            chipActiveBorder: `rgb(${ACCENT_RGB})`,
+            chipActiveBg: `rgb(${ACCENT_RGB})`,
+            chipActiveText: "#083344",
             chipBorder: "rgba(31, 45, 61, 0.2)",
             chipBg: "#ffffff",
             chipText: "#1f2d3d",
@@ -781,12 +782,12 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardBg: "#ffffff",
             cardShadow1: "rgba(18, 38, 63, 0.08)",
             cardShadow2: "rgba(18, 38, 63, 0.06)",
-            summaryBg: `linear-gradient(90deg, ${grafanaTheme.colors.background.secondary} 0%, ${grafanaTheme.colors.background.primary} 100%)`,
-            summaryHoverBg: grafanaTheme.colors.action.hover,
-            summaryText: grafanaTheme.colors.text.primary,
-            summaryMetaText: grafanaTheme.colors.text.secondary,
-            summaryChevronBg: grafanaTheme.colors.action.selected,
-            summaryChevronBorder: grafanaTheme.colors.border.weak,
+            summaryBg: `rgb(${ACCENT_RGB})`,
+            summaryHoverBg: `rgb(${ACCENT_RGB})`,
+            summaryText: "#083344",
+            summaryMetaText: "#0f4c3a",
+            summaryChevronBg: "#ffffff",
+            summaryChevronBorder: "#ffffff",
             chipXActiveBg: "rgba(255, 255, 255, 0.2)",
             chipXBg: "rgba(31, 45, 61, 0.12)",
             overlayBg: "rgba(240, 245, 250, 0.72)",
@@ -801,9 +802,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             toolbarBorder: "rgba(229, 231, 235, 0.16)",
             toolbarShadow: "rgba(0, 0, 0, 0.45)",
             textPrimary: "#f3f4f6",
-            chipActiveBorder: "#f3f4f6",
-            chipActiveBg: "#e5e7eb",
-            chipActiveText: "#111827",
+            chipActiveBorder: `rgb(${ACCENT_RGB})`,
+            chipActiveBg: `rgb(${ACCENT_RGB})`,
+            chipActiveText: "#083344",
             chipBorder: "rgba(229, 231, 235, 0.26)",
             chipBg: "rgba(42, 46, 54, 0.95)",
             chipText: "#f3f4f6",
@@ -814,12 +815,12 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardBg: "#1f232b",
             cardShadow1: "rgba(0, 0, 0, 0.52)",
             cardShadow2: "rgba(0, 0, 0, 0.34)",
-            summaryBg: "linear-gradient(90deg, #20242c 0%, #2b313a 100%)",
-            summaryHoverBg: "rgba(48, 54, 64, 0.98)",
-            summaryText: "#f9fafb",
-            summaryMetaText: "rgba(249, 250, 251, 0.74)",
-            summaryChevronBg: "rgba(249, 250, 251, 0.12)",
-            summaryChevronBorder: "rgba(249, 250, 251, 0.2)",
+            summaryBg: `rgb(${ACCENT_RGB})`,
+            summaryHoverBg: `rgb(${ACCENT_RGB})`,
+            summaryText: "#083344",
+            summaryMetaText: "#0f4c3a",
+            summaryChevronBg: "#ffffff",
+            summaryChevronBorder: "#ffffff",
             chipXActiveBg: "rgba(17, 24, 39, 0.35)",
             chipXBg: "rgba(229, 231, 235, 0.20)",
             overlayBg: "rgba(22, 25, 30, 0.74)",
@@ -1478,7 +1479,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         setOpenKeys((prev) => {
           const next = new Set(prev);
           if (open) {
-            next.clear();
             next.add(key);
           } else {
             next.delete(key);
@@ -1556,12 +1556,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     },
     [renderComponent]
   );
-
-  const sortedSections = useMemo(() => {
-    const activeSections = sections.filter((cfg) => openKeys.has(cfg.key));
-    const inactiveSections = sections.filter((cfg) => !openKeys.has(cfg.key));
-    return [...activeSections, ...inactiveSections];
-  }, [sections, openKeys]);
 
   return (
     <div className={wrapperClass}>
@@ -1647,7 +1641,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           align-items: start;
         `}
       >
-      {sortedSections.map((cfg) => {
+      {sections.map((cfg) => {
         const isOpen = openKeys.has(cfg.key);
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
