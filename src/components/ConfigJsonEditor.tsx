@@ -11,7 +11,7 @@ import { SimpleOptions } from 'types';
 
 type Props = PanelOptionsEditorProps<string>;
 
-type ChartType = 'chart' | 'html';
+type ChartType = 'chart' | 'html' | 'widget';
 type CodeKey = 'code' | 'codigo' | 'funcion';
 type HtmlKey = 'html' | 'contenidoHtml' | 'template' | 'plantilla';
 type CssKey = 'css' | 'estilos';
@@ -49,6 +49,9 @@ const getChartType = (chart: any): ChartType => {
   const typeRaw = String(chart?.type ?? chart?.tipo ?? chart?.componentType ?? chart?.componente ?? chart?.component ?? 'chart')
     .trim()
     .toLowerCase();
+  if (typeRaw === 'widget' || typeRaw === 'interactive' || typeRaw === 'html-widget') {
+    return 'widget';
+  }
   return typeRaw === 'html' || typeRaw === 'table' || typeRaw === 'tabla' ? 'html' : 'chart';
 };
 
@@ -368,8 +371,8 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
     if (!parsed || !selectedEntry) return;
     try {
       setCodeError(null);
-      const isHtml = selectedEntry.chartType === 'html';
-      if (!isHtml) {
+      const isMarkupComponent = selectedEntry.chartType === 'html' || selectedEntry.chartType === 'widget';
+      if (!isMarkupComponent) {
         const raw = selectedEntry.code ?? '';
         const wrapped = `function __chart(data, echarts, vars, context) {\n${raw}\n}`;
         const formatted = await prettier.format(wrapped, {
@@ -465,7 +468,11 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
       <div className={css`display: flex; flex-direction: column; gap: 8px;`}>
         <div className={css`display: flex; align-items: center; justify-content: space-between; gap: 8px;`}>
           <div className={css`font-size: 12px; font-weight: 600; color: #cdd6e3;`}>
-            {selectedEntry?.chartType === 'html' ? 'Editor de componente HTML' : 'Editor de codigo de grafica'}
+            {selectedEntry?.chartType === 'html'
+              ? 'Editor de componente HTML'
+              : selectedEntry?.chartType === 'widget'
+                ? 'Editor de widget interactivo'
+                : 'Editor de codigo de grafica'}
           </div>
           <div className={css`display: flex; align-items: center; gap: 8px;`}>
             <span className={css`font-size: 12px; color: #8ea2bd; min-width: 125px; text-align: right;`}>
@@ -499,7 +506,7 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
             {codeError}
           </div>
         )}
-        {selectedEntry?.chartType === 'html' ? (
+        {selectedEntry?.chartType === 'html' || selectedEntry?.chartType === 'widget' ? (
           <div className={css`display: flex; flex-direction: column; gap: 10px;`}>
             <div className={css`font-size: 12px; font-weight: 600; color: #cdd6e3;`}>HTML</div>
             <CodeEditor

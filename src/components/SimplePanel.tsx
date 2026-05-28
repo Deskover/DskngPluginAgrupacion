@@ -14,7 +14,7 @@ const ACCENT_RGB = "52, 222, 154";
 type ChartConfig = {
   key: string;
   title: string;
-  type?: "chart" | "html";
+  type?: "chart" | "html" | "widget";
   height?: number;
   option?: echarts.EChartsOption;
   endpoint?: ChartEndpoint;
@@ -27,6 +27,56 @@ type ChartConfig = {
 type HtmlContent = {
   html: string;
   css?: string;
+};
+
+type WidgetApi = {
+  mount?: (ctx: WidgetLifecycleContext) => void;
+  update?: (ctx: WidgetLifecycleContext) => void;
+  destroy?: (ctx: WidgetLifecycleContext) => void;
+  html?: string;
+  css?: string;
+};
+
+type WidgetExecutionResult = {
+  html: string;
+  css: string;
+  api: WidgetApi | null;
+};
+
+type WidgetRuntime = {
+  cacheKey: string;
+  chartKey: string;
+  root: HTMLDivElement;
+  html: string;
+  css: string;
+  api: WidgetApi | null;
+  state: Record<string, unknown>;
+  payload: unknown;
+  vars: Record<string, unknown>;
+  cleanupFns: Array<() => void>;
+};
+
+type WidgetLifecycleContext = {
+  root: HTMLDivElement;
+  contentRoot: HTMLElement | null;
+  data: unknown;
+  vars: Record<string, unknown>;
+  echarts: typeof echarts;
+  state: Record<string, unknown>;
+  cleanup: (fn: () => void) => void;
+  grafana: {
+    locationService: typeof locationService;
+    scopedVars: Record<string, unknown>;
+    replaceVariables: (value: string, format?: string) => string;
+  };
+  panel: {
+    id?: number;
+    pluginId: string;
+    groupKey: string;
+    chartKey: string;
+    width: number;
+    height: number;
+  };
 };
 
 type AccordionConfig = {
@@ -447,7 +497,12 @@ const normalizeChart = (raw: any, chartIndex: number, sectionKey: string): Chart
   )
     .trim()
     .toLowerCase();
-  const normalizedType = typeRaw === "html" || typeRaw === "table" || typeRaw === "tabla" ? "html" : "chart";
+  const normalizedType =
+    typeRaw === "widget" || typeRaw === "interactive" || typeRaw === "html-widget"
+      ? "widget"
+      : typeRaw === "html" || typeRaw === "table" || typeRaw === "tabla"
+        ? "html"
+        : "chart";
   return {
     key,
     title,
@@ -880,15 +935,81 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const attachedChartEventsRef = useRef<Record<string, Set<string>>>({});
   const htmlCacheRef = useRef<Record<string, HtmlContent | null>>({});
   const htmlInFlightRef = useRef<Record<string, Promise<HtmlContent | null> | null>>({});
+  const widgetDomRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const widgetRuntimeRef = useRef<Record<string, WidgetRuntime | null>>({});
   const errorCacheRef = useRef<Record<string, number>>({});
   const scopedVarsVersionRef = useRef(0);
   const [htmlContents, setHtmlContents] = useState<Record<string, HtmlContent>>({});
 
+  const destroyWidgetRuntimeInternal = useCallback(
+    (groupKey: string, clearMarkup = false) => {
+      const runtime = widgetRuntimeRef.current[groupKey];
+      if (!runtime) {
+        return;
+      }
+
+      const context: WidgetLifecycleContext = {
+        root: runtime.root,
+        contentRoot: runtime.root.querySelector("[data-dsk-widget-content]"),
+        data: runtime.payload,
+        vars: runtime.vars,
+        echarts,
+        state: runtime.state,
+        cleanup: () => undefined,
+        grafana: {
+          locationService,
+          scopedVars: effectiveScopedVars,
+          replaceVariables: (value: string, format?: string) => replaceVars(value, effectiveScopedVars, format),
+        },
+        panel: {
+          id,
+          pluginId: PLUGIN_ID,
+          groupKey,
+          chartKey: runtime.chartKey,
+          width,
+          height,
+        },
+      };
+
+      if (runtime.api?.destroy) {
+        try {
+          runtime.api.destroy(context);
+        } catch (error) {
+          console.error("Error destruyendo widget", error);
+        }
+      }
+
+      runtime.cleanupFns.slice().reverse().forEach((cleanup) => {
+        try {
+          cleanup();
+        } catch (error) {
+          console.error("Error ejecutando limpieza de widget", error);
+        }
+      });
+
+      const nodes = [runtime.root, ...Array.from(runtime.root.querySelectorAll<HTMLElement>("*"))];
+      nodes.forEach((node) => {
+        const instance = echarts.getInstanceByDom(node as HTMLDivElement);
+        if (instance && !instance.isDisposed?.()) {
+          instance.dispose();
+        }
+      });
+
+      if (clearMarkup) {
+        runtime.root.innerHTML = "";
+      }
+      widgetRuntimeRef.current[groupKey] = null;
+    },
+    [effectiveScopedVars, height, id, width]
+  );
+
   useEffect(() => {
+    const runtimeKeys = Object.keys(widgetRuntimeRef.current);
     return () => {
       Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
+      runtimeKeys.forEach((groupKey) => destroyWidgetRuntimeInternal(groupKey, false));
     };
-  }, []);
+  }, [destroyWidgetRuntimeInternal]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -948,6 +1069,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     chartInstancesRef.current = {};
     attachedChartEventsRef.current = {};
     domRefs.current = {};
+    Object.keys(widgetRuntimeRef.current).forEach((groupKey) => destroyWidgetRuntimeInternal(groupKey, true));
+    widgetDomRefs.current = {};
     setLoadingCharts({});
     const initialOpen = new Set<string>();
     if (sections[0]?.key) {
@@ -960,7 +1083,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     });
     setActiveCharts(initial);
     setHiddenCharts({});
-  }, [sections]);
+  }, [destroyWidgetRuntimeInternal, sections]);
 
   useEffect(() => {
     optionCacheRef.current = {};
@@ -969,8 +1092,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     attachedChartEventsRef.current = {};
     htmlCacheRef.current = {};
     htmlInFlightRef.current = {};
+    Object.keys(widgetRuntimeRef.current).forEach((groupKey) => destroyWidgetRuntimeInternal(groupKey, false));
     setHtmlContents({});
-  }, [panelConfig]);
+  }, [destroyWidgetRuntimeInternal, panelConfig]);
 
   useEffect(() => {
     scopedVarsVersionRef.current += 1;
@@ -980,8 +1104,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     attachedChartEventsRef.current = {};
     htmlCacheRef.current = {};
     htmlInFlightRef.current = {};
+    Object.keys(widgetRuntimeRef.current).forEach((groupKey) => destroyWidgetRuntimeInternal(groupKey, false));
     setHtmlContents({});
-  }, [stabilizedVarsFingerprint]);
+  }, [destroyWidgetRuntimeInternal, stabilizedVarsFingerprint]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1273,6 +1398,75 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     []
   );
 
+  const applyWidgetMarkup = useCallback((root: HTMLDivElement, html: string, cssText: string) => {
+    const styleMarkup = cssText ? `<style data-dsk-widget-style>${cssText}</style>` : "";
+    root.innerHTML = `${styleMarkup}<div data-dsk-widget-content>${html}</div>`;
+  }, []);
+
+  const buildWidgetLifecycleContext = useCallback(
+    (groupKey: string, chartKey: string, runtime: WidgetRuntime): WidgetLifecycleContext => ({
+      root: runtime.root,
+      contentRoot: runtime.root.querySelector("[data-dsk-widget-content]"),
+      data: runtime.payload,
+      vars: runtime.vars,
+      echarts,
+      state: runtime.state,
+      cleanup: (fn: () => void) => {
+        if (typeof fn === "function") {
+          runtime.cleanupFns.push(fn);
+        }
+      },
+      grafana: {
+        locationService,
+        scopedVars: effectiveScopedVars,
+        replaceVariables: (value: string, format?: string) => replaceVars(value, effectiveScopedVars, format),
+      },
+      panel: {
+        id,
+        pluginId: PLUGIN_ID,
+        groupKey,
+        chartKey,
+        width,
+        height,
+      },
+    }),
+    [effectiveScopedVars, height, id, width]
+  );
+
+  const disposeWidgetRuntime = useCallback(
+    (groupKey: string, clearMarkup = false) => {
+      destroyWidgetRuntimeInternal(groupKey, clearMarkup);
+    },
+    [destroyWidgetRuntimeInternal]
+  );
+
+  const buildWidgetFromCode = useCallback(
+    (jsCode: string, payload: unknown, vars: Record<string, unknown>, baseHtml?: string, baseCss?: string) => {
+      try {
+        const fn = new Function("data", "vars", "baseHtml", "baseCss", "echarts", jsCode);
+        const result = fn(payload, vars, baseHtml ?? "", baseCss ?? "", echarts);
+        if (typeof result === "string") {
+          return { html: result, css: baseCss ?? "", api: null } as WidgetExecutionResult;
+        }
+        if (result && typeof result === "object") {
+          const asWidget = result as WidgetApi;
+          const html = String(asWidget.html ?? baseHtml ?? "");
+          const cssText = String(asWidget.css ?? baseCss ?? "");
+          const hasLifecycle =
+            typeof asWidget.mount === "function" ||
+            typeof asWidget.update === "function" ||
+            typeof asWidget.destroy === "function";
+          return { html, css: cssText, api: hasLifecycle ? asWidget : null } as WidgetExecutionResult;
+        }
+        return { html: baseHtml ?? "", css: baseCss ?? "", api: null } as WidgetExecutionResult;
+      } catch (error) {
+        console.error("Error ejecutando codigo de widget", error);
+        return null;
+      }
+    },
+    []
+  );
+
   const getHtmlContent = useCallback(
     async (groupKey: string, chart: ChartConfig) => {
       const cacheKey = `${groupKey}::${chart.key}`;
@@ -1349,6 +1543,111 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       return result;
     },
     [buildHtmlFromCode, data, effectiveScopedVars, fetchChartData]
+  );
+
+  const renderWidget = useCallback(
+    async (groupKey: string, chart: ChartConfig) => {
+      const cacheKey = `${groupKey}::${chart.key}`;
+      const root = widgetDomRefs.current[groupKey];
+      if (!root) {
+        return;
+      }
+
+      if (chart.endpoint) {
+        setLoadingCharts((prev) => ({ ...prev, [cacheKey]: true }));
+      }
+
+      try {
+        let payload: unknown = data;
+        if (chart.endpoint) {
+          payload = await fetchChartData(chart.endpoint);
+        }
+
+        const vars = {
+          scopedVars: effectiveScopedVars,
+          grafanaData: data,
+          refId: chart.endpoint?.refId,
+        };
+        const jsCode = (chart.js ?? chart.code ?? "").trim();
+        const widgetResult = jsCode
+          ? buildWidgetFromCode(jsCode, payload, vars, chart.html ?? "", chart.css ?? "")
+          : ({ html: chart.html ?? "", css: chart.css ?? "", api: null } as WidgetExecutionResult);
+
+        if (!widgetResult) {
+          throw new Error("La funcion del widget no retorno una configuracion valida.");
+        }
+
+        const currentRuntime = widgetRuntimeRef.current[groupKey];
+        const shouldRemount =
+          !currentRuntime ||
+          currentRuntime.cacheKey !== cacheKey ||
+          currentRuntime.root !== root ||
+          currentRuntime.html !== widgetResult.html ||
+          currentRuntime.css !== widgetResult.css;
+
+        if (shouldRemount) {
+          disposeWidgetRuntime(groupKey, false);
+          applyWidgetMarkup(root, widgetResult.html, widgetResult.css);
+          const nextRuntime: WidgetRuntime = {
+            cacheKey,
+            chartKey: chart.key,
+            root,
+            html: widgetResult.html,
+            css: widgetResult.css,
+            api: widgetResult.api,
+            state: {},
+            payload,
+            vars,
+            cleanupFns: [],
+          };
+          widgetRuntimeRef.current[groupKey] = nextRuntime;
+          if (widgetResult.api?.mount) {
+            widgetResult.api.mount(buildWidgetLifecycleContext(groupKey, chart.key, nextRuntime));
+          }
+        } else {
+          currentRuntime.payload = payload;
+          currentRuntime.vars = vars;
+          currentRuntime.chartKey = chart.key;
+          currentRuntime.api = widgetResult.api;
+          if (currentRuntime.api?.update) {
+            currentRuntime.api.update(buildWidgetLifecycleContext(groupKey, chart.key, currentRuntime));
+          }
+        }
+
+        setChartErrors((prev) => {
+          if (!prev[cacheKey]) {
+            return prev;
+          }
+          const next = { ...prev };
+          delete next[cacheKey];
+          return next;
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Error al cargar el widget";
+        setChartErrors((prev) => ({ ...prev, [cacheKey]: message }));
+        errorCacheRef.current[cacheKey] = Date.now();
+      } finally {
+        if (chart.endpoint) {
+          setLoadingCharts((prev) => {
+            if (!prev[cacheKey]) {
+              return prev;
+            }
+            const next = { ...prev };
+            delete next[cacheKey];
+            return next;
+          });
+        }
+      }
+    },
+    [
+      applyWidgetMarkup,
+      buildWidgetFromCode,
+      buildWidgetLifecycleContext,
+      data,
+      disposeWidgetRuntime,
+      effectiveScopedVars,
+      fetchChartData,
+    ]
   );
 
   const getChartOption = useCallback(
@@ -1441,6 +1740,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
   const renderComponent = useCallback(
     async (groupKey: string, chart: ChartConfig) => {
+      if (chart.type !== "widget") {
+        disposeWidgetRuntime(groupKey, true);
+      }
       if (chart.type === "html") {
         const existing = chartInstancesRef.current[groupKey];
         if (existing && !existing.isDisposed?.()) {
@@ -1450,9 +1752,18 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         await getHtmlContent(groupKey, chart);
         return;
       }
+      if (chart.type === "widget") {
+        const existing = chartInstancesRef.current[groupKey];
+        if (existing && !existing.isDisposed?.()) {
+          existing.dispose();
+          chartInstancesRef.current[groupKey] = null;
+        }
+        await renderWidget(groupKey, chart);
+        return;
+      }
       await renderChart(groupKey, chart);
     },
-    [getHtmlContent, renderChart]
+    [disposeWidgetRuntime, getHtmlContent, renderChart, renderWidget]
   );
 
   useEffect(() => {
@@ -1546,7 +1857,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
   const makeChartRef = useCallback(
     (groupKey: string, chart: ChartConfig) => (node: HTMLDivElement | null) => {
-      if (chart.type === "html") {
+      if (chart.type === "html" || chart.type === "widget") {
         return;
       }
       if (node) {
@@ -1555,6 +1866,21 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       }
     },
     [renderComponent]
+  );
+
+  const makeWidgetRef = useCallback(
+    (groupKey: string, chart: ChartConfig) => (node: HTMLDivElement | null) => {
+      if (chart.type !== "widget") {
+        return;
+      }
+      widgetDomRefs.current[groupKey] = node;
+      if (node) {
+        requestAnimationFrame(() => renderComponent(groupKey, chart));
+        return;
+      }
+      disposeWidgetRuntime(groupKey, false);
+    },
+    [disposeWidgetRuntime, renderComponent]
   );
 
   return (
@@ -1857,6 +2183,20 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                 {htmlContent?.css && <style>{htmlContent.css}</style>}
                 <div dangerouslySetInnerHTML={{ __html: htmlContent?.html ?? activeChart?.html ?? "" }} />
               </div>
+            ) : activeChart?.type === "widget" ? (
+              <div
+                key={`${cfg.key}:${activeChart?.key ?? "none"}:widget`}
+                ref={activeChart ? makeWidgetRef(cfg.key, activeChart) : undefined}
+                style={{
+                  width: "100%",
+                  minHeight: activeChart?.height ?? 280,
+                  opacity: chartLoading ? 0.45 : 1,
+                  filter: chartLoading ? "blur(1.25px)" : "blur(0px)",
+                  transform: chartLoading ? "scale(0.995)" : "scale(1)",
+                  transition: "opacity 240ms ease, filter 260ms ease, transform 260ms ease",
+                  overflowX: "auto",
+                }}
+              />
             ) : (
               <div
                 key={`${cfg.key}:${activeChart?.key ?? "none"}:chart`}
