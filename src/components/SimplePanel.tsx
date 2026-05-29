@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelProps } from '@grafana/data';
 import { getTemplateSrv, locationService } from '@grafana/runtime';
+import { Icon, useTheme2 } from '@grafana/ui';
 import { SimpleOptions } from 'types';
 import { css } from '@emotion/css';
 
@@ -8,6 +9,7 @@ import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
 
 const PLUGIN_ID = "dsknggrafana-deskoverplugin-panel";
+const ACCENT_RGB = "52, 222, 154";
 
 type ChartConfig = {
   key: string;
@@ -55,6 +57,9 @@ type ChartEndpoint = {
   useProxy?: boolean;
   proxyPath?: string;
 };
+
+type ChartEventHandler = (params: any) => void;
+type ChartEventRegistry = Record<string, ChartEventHandler[]>;
 
 const chartsConfigAbstencionismo: AccordionConfig[] = [
   {
@@ -262,13 +267,17 @@ const getVarCalculo = (): string => {
 };
 
 const normalizeCalculo = (value: string) => value.trim().toLowerCase();
-const getThemeModeFromUrl = (search: string): "light" | "dark" => {
+const getThemeModeFromUrl = (search: string): "light" | "dark" | null => {
   try {
     const params = new URLSearchParams(search);
-    const raw = params.get("theme") ?? params.get("var-theme") ?? "";
-    return raw.trim().toLowerCase() === "light" ? "light" : "dark";
+    const raw = params.get("theme") ?? params.get("var-theme");
+    const normalized = raw?.trim().toLowerCase();
+    if (normalized === "light" || normalized === "dark") {
+      return normalized;
+    }
+    return null;
   } catch {
-    return "dark";
+    return null;
   }
 };
 
@@ -383,6 +392,34 @@ const normalizeEndpoint = (raw?: any): ChartEndpoint | undefined => {
     useProxy,
     proxyPath,
   };
+};
+
+const payloadToEditorDataset = (payload: unknown): any => {
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, any>;
+    if (record.dataset) return record.dataset;
+    if (record.source) return { source: record.source };
+    if (record.data && typeof record.data === "object") {
+      const nested = record.data as Record<string, any>;
+      if (nested.dataset) return nested.dataset;
+      if (nested.source) return { source: nested.source };
+    }
+    if (Array.isArray(record.data)) return { source: record.data };
+  }
+  if (Array.isArray(payload)) return { source: payload };
+  return { source: [] };
+};
+
+const payloadToEditorSeries = (payload: unknown): any[] => {
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, any>;
+    if (Array.isArray(record.series)) return record.series;
+    if (record.data && typeof record.data === "object") {
+      const nested = record.data as Record<string, any>;
+      if (Array.isArray(nested.series)) return nested.series;
+    }
+  }
+  return [];
 };
 
 const slugPart = (value: any): string => {
@@ -715,12 +752,13 @@ const parsePanelConfigUnknown = (raw: unknown): ParsedConfig => {
 };
 
 export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fieldConfig, id }) => {
+  const grafanaTheme = useTheme2();
   const [calculo, setCalculo] = useState<string>(() => getVarCalculo());
   const [urlSearch, setUrlSearch] = useState<string>(() =>
     typeof window === "undefined" ? "" : window.location.search
   );
   const themeMode = useMemo(() => getThemeModeFromUrl(urlSearch), [urlSearch]);
-  const isLightTheme = themeMode === "light";
+  const isLightTheme = themeMode ? themeMode === "light" : grafanaTheme.isLight;
   const ui = useMemo(
     () =>
       isLightTheme
@@ -731,9 +769,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             toolbarBorder: "rgba(31, 45, 61, 0.12)",
             toolbarShadow: "rgba(18, 38, 63, 0.06)",
             textPrimary: "#1f2d3d",
-            chipActiveBorder: "#1f2d3d",
-            chipActiveBg: "#1f2d3d",
-            chipActiveText: "#ffffff",
+            chipActiveBorder: `rgb(${ACCENT_RGB})`,
+            chipActiveBg: `rgb(${ACCENT_RGB})`,
+            chipActiveText: "#083344",
             chipBorder: "rgba(31, 45, 61, 0.2)",
             chipBg: "#ffffff",
             chipText: "#1f2d3d",
@@ -744,8 +782,12 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardBg: "#ffffff",
             cardShadow1: "rgba(18, 38, 63, 0.08)",
             cardShadow2: "rgba(18, 38, 63, 0.06)",
-            summaryBg: "linear-gradient(90deg, #1f2d3d 0%, #2c3e50 100%)",
-            summaryText: "#f7fbff",
+            summaryBg: `rgb(${ACCENT_RGB})`,
+            summaryHoverBg: `rgb(${ACCENT_RGB})`,
+            summaryText: "#083344",
+            summaryMetaText: "#0f4c3a",
+            summaryChevronBg: "#ffffff",
+            summaryChevronBorder: "#ffffff",
             chipXActiveBg: "rgba(255, 255, 255, 0.2)",
             chipXBg: "rgba(31, 45, 61, 0.12)",
             overlayBg: "rgba(240, 245, 250, 0.72)",
@@ -760,9 +802,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             toolbarBorder: "rgba(229, 231, 235, 0.16)",
             toolbarShadow: "rgba(0, 0, 0, 0.45)",
             textPrimary: "#f3f4f6",
-            chipActiveBorder: "#f3f4f6",
-            chipActiveBg: "#e5e7eb",
-            chipActiveText: "#111827",
+            chipActiveBorder: `rgb(${ACCENT_RGB})`,
+            chipActiveBg: `rgb(${ACCENT_RGB})`,
+            chipActiveText: "#083344",
             chipBorder: "rgba(229, 231, 235, 0.26)",
             chipBg: "rgba(42, 46, 54, 0.95)",
             chipText: "#f3f4f6",
@@ -773,8 +815,12 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardBg: "#1f232b",
             cardShadow1: "rgba(0, 0, 0, 0.52)",
             cardShadow2: "rgba(0, 0, 0, 0.34)",
-            summaryBg: "linear-gradient(90deg, #20242c 0%, #2b313a 100%)",
-            summaryText: "#f9fafb",
+            summaryBg: `rgb(${ACCENT_RGB})`,
+            summaryHoverBg: `rgb(${ACCENT_RGB})`,
+            summaryText: "#083344",
+            summaryMetaText: "#0f4c3a",
+            summaryChevronBg: "#ffffff",
+            summaryChevronBorder: "#ffffff",
             chipXActiveBg: "rgba(17, 24, 39, 0.35)",
             chipXBg: "rgba(229, 231, 235, 0.20)",
             overlayBg: "rgba(22, 25, 30, 0.74)",
@@ -782,7 +828,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             loaderWord: "rgba(249, 250, 251, 0.97)",
             loaderDot: "#f3f4f6",
           },
-    [isLightTheme]
+    [grafanaTheme, isLightTheme]
   );
   const effectiveScopedVars = useMemo(
     () => mergeScopedVars(data?.request?.scopedVars, urlSearch),
@@ -830,6 +876,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const domRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const optionCacheRef = useRef<Record<string, echarts.EChartsOption | null>>({});
   const inFlightRef = useRef<Record<string, Promise<echarts.EChartsOption | null> | null>>({});
+  const chartEventHandlersRef = useRef<Record<string, ChartEventRegistry>>({});
+  const attachedChartEventsRef = useRef<Record<string, Set<string>>>({});
   const htmlCacheRef = useRef<Record<string, HtmlContent | null>>({});
   const htmlInFlightRef = useRef<Record<string, Promise<HtmlContent | null> | null>>({});
   const errorCacheRef = useRef<Record<string, number>>({});
@@ -899,6 +947,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   useEffect(() => {
     Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
     chartInstancesRef.current = {};
+    attachedChartEventsRef.current = {};
     domRefs.current = {};
     setLoadingCharts({});
     const initialOpen = new Set<string>();
@@ -917,6 +966,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   useEffect(() => {
     optionCacheRef.current = {};
     inFlightRef.current = {};
+    chartEventHandlersRef.current = {};
+    attachedChartEventsRef.current = {};
     htmlCacheRef.current = {};
     htmlInFlightRef.current = {};
     setHtmlContents({});
@@ -926,6 +977,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     scopedVarsVersionRef.current += 1;
     optionCacheRef.current = {};
     inFlightRef.current = {};
+    chartEventHandlersRef.current = {};
+    attachedChartEventsRef.current = {};
     htmlCacheRef.current = {};
     htmlInFlightRef.current = {};
     setHtmlContents({});
@@ -1015,53 +1068,49 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     setSelectedCategory(category);
   }, []);
 
-  const handleBarSelection = useCallback(
-    (name: string) => {
-      const scopedVars = effectiveScopedVars;
-      const selectedValue = replaceVars("${seleccion_valor}", scopedVars).trim();
-      const resolvedDataset = replaceVars("${estadosquaker}", scopedVars);
-      const datasetValue = resolvedDataset && resolvedDataset !== "${estadosquaker}" ? resolvedDataset : "estadosquaker";
-
-      locationService.partial(
-        { "var-geomap_wms_spatial_filter_geometry": "POLYGON((-180 -90,180 -90,180 90,-180 90,-180 -90))" },
-        true
-      );
-
-      if (selectedValue !== name) {
-        if (typeof window !== "undefined") {
-          sessionStorage.setItem("entidad", name);
-          sessionStorage.removeItem("zona");
-          sessionStorage.removeItem("municipio");
-        }
-        locationService.partial(
-          {
-            "var-seleccion_atributo": "nomgeo",
-            "var-seleccion_dataset": datasetValue,
-            "var-seleccion_valor": name,
-          },
-          true
-        );
-        return;
-      }
-
-      if (typeof window !== "undefined") {
-        sessionStorage.removeItem("municipio");
-        sessionStorage.removeItem("zona");
-      }
-      locationService.partial(
-        {
-          "var-seleccion_valor": " ",
-          "var-seleccion_atributo": " ",
-          "var-seleccion_dataset": " ",
+  const createChartCodeContext = useCallback(
+    (
+      groupKey: string,
+      payload: unknown,
+      vars: Record<string, unknown>,
+      registerEvent: (eventName: string, handler: ChartEventHandler) => void,
+      clearEvent: (eventName?: string) => void
+    ) => {
+      const chartProxy = {
+        on: registerEvent,
+        off: clearEvent,
+        get _model() {
+          return (chartInstancesRef.current[groupKey] as any)?._model;
         },
-        true
-      );
+        getOption: () => chartInstancesRef.current[groupKey]?.getOption(),
+        resize: () => chartInstancesRef.current[groupKey]?.resize(),
+        dispatchAction: (action: any) => chartInstancesRef.current[groupKey]?.dispatchAction(action),
+        setOption: (...args: any[]) => (chartInstancesRef.current[groupKey] as any)?.setOption(...args),
+      };
+
+      return {
+        data: payload,
+        echarts,
+        vars,
+        editor: {
+          dataset: payloadToEditorDataset(payload),
+          series: payloadToEditorSeries(payload),
+        },
+        grafana: {
+          locationService,
+          scopedVars: effectiveScopedVars,
+          replaceVariables: (value: string, format?: string) => replaceVars(value, effectiveScopedVars, format),
+        },
+        panel: {
+          chart: chartProxy,
+        },
+      };
     },
     [effectiveScopedVars]
   );
 
   const ensureChart = useCallback(
-    (groupKey: string, option: echarts.EChartsOption) => {
+    (groupKey: string, cacheKey: string, option: echarts.EChartsOption) => {
       const el = domRefs.current[groupKey];
       if (!el) return;
 
@@ -1069,7 +1118,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       const w = el.clientWidth;
       const h = el.clientHeight;
       if (w === 0 || h === 0) {
-        requestAnimationFrame(() => ensureChart(groupKey, option));
+        requestAnimationFrame(() => ensureChart(groupKey, cacheKey, option));
         return;
       }
 
@@ -1095,15 +1144,29 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       if (optionWithMotion.animationEasingUpdate == null) optionWithMotion.animationEasingUpdate = "quarticOut";
       const finalOption = isLightTheme ? optionWithMotion : withDarkChartText(optionWithMotion);
       chart.setOption(finalOption, { notMerge: true, lazyUpdate: true });
-      chart.off("click");
-      chart.on("click", (params: any) => {
-        if (params?.componentType !== "series") return;
-        if (!params?.name) return;
-        handleBarSelection(String(params.name));
+
+      const previousEvents = attachedChartEventsRef.current[groupKey] ?? new Set<string>();
+      previousEvents.forEach((eventName) => (chart as any).off(eventName));
+
+      const nextEvents = new Set<string>();
+      const eventHandlers = chartEventHandlersRef.current[cacheKey] ?? {};
+      Object.entries(eventHandlers).forEach(([eventName, handlers]) => {
+        if (handlers.length === 0) return;
+        nextEvents.add(eventName);
+        handlers.forEach((handler) => {
+          (chart as any).on(eventName, (params: any) => {
+            try {
+              handler(params);
+            } catch (error) {
+              console.error(`Error ejecutando handler ${eventName} de grafica`, error);
+            }
+          });
+        });
       });
+      attachedChartEventsRef.current[groupKey] = nextEvents;
       chart.resize();
     },
-    [handleBarSelection, isLightTheme]
+    [isLightTheme]
   );
 
   const buildUrl = (endpoint: ChartEndpoint, scopedVars?: Record<string, any>) => {
@@ -1162,16 +1225,35 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     return response.text();
   }, [data?.series, effectiveScopedVars, stabilizedVarsFingerprint]);
 
-  const buildOptionFromCode = useCallback(async (code: string, payload: unknown, vars: Record<string, unknown>) => {
-    try {
-      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-      const fn = new AsyncFunction("data", "echarts", "vars", code);
-      return await fn(payload, echarts, vars);
-    } catch (error) {
-      console.error("Error ejecutando codigo de grafica", error);
-      return null;
-    }
-  }, []);
+  const buildOptionFromCode = useCallback(
+    (groupKey: string, cacheKey: string, code: string, payload: unknown, vars: Record<string, unknown>) => {
+      const handlers: ChartEventRegistry = {};
+      const registerEvent = (eventName: string, handler: ChartEventHandler) => {
+        if (typeof eventName !== "string" || typeof handler !== "function") return;
+        handlers[eventName] = [...(handlers[eventName] ?? []), handler];
+      };
+      const clearEvent = (eventName?: string) => {
+        if (!eventName) {
+          Object.keys(handlers).forEach((key) => delete handlers[key]);
+          return;
+        }
+        delete handlers[eventName];
+      };
+
+      try {
+        chartEventHandlersRef.current[cacheKey] = handlers;
+        const context = createChartCodeContext(groupKey, payload, vars, registerEvent, clearEvent);
+        const fn = new Function("data", "echarts", "vars", "context", code);
+        const result = fn(payload, echarts, vars, context);
+        return result;
+      } catch (error) {
+        delete chartEventHandlersRef.current[cacheKey];
+        console.error("Error ejecutando codigo de grafica", error);
+        return null;
+      }
+    },
+    [createChartCodeContext]
+  );
 
   const buildHtmlFromCode = useCallback(
     // Agregamos 'async' aquí
@@ -1303,7 +1385,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           }
 
           if (chart.code) {
-            option = await buildOptionFromCode(chart.code, payload, {
+            option = buildOptionFromCode(groupKey, cacheKey, chart.code, payload, {
               baseOption: chart.option ?? null,
               scopedVars: effectiveScopedVars,
               refId: chart.endpoint?.refId,
@@ -1361,7 +1443,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     async (groupKey: string, chart: ChartConfig) => {
       const option = await getChartOption(groupKey, chart);
       if (!option) return;
-      ensureChart(groupKey, option);
+      ensureChart(groupKey, `${groupKey}::${chart.key}`, option);
     },
     [ensureChart, getChartOption]
   );
@@ -1406,7 +1488,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         setOpenKeys((prev) => {
           const next = new Set(prev);
           if (open) {
-            next.clear();
             next.add(key);
           } else {
             next.delete(key);
@@ -1499,12 +1580,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     },
     [renderComponent]
   );
-
-  const sortedSections = useMemo(() => {
-    const activeSections = sections.filter((cfg) => openKeys.has(cfg.key));
-    const inactiveSections = sections.filter((cfg) => !openKeys.has(cfg.key));
-    return [...activeSections, ...inactiveSections];
-  }, [sections, openKeys]);
 
   return (
     <div ref={wrapperRef} className={wrapperClass}>
@@ -1619,7 +1694,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           align-items: start;
         `}
       >
-      {sortedSections.map((cfg) => {
+      {sections.map((cfg) => {
+        const isOpen = openKeys.has(cfg.key);
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
         const fallbackKey = visibleCharts[0]?.key ?? "";
@@ -1632,7 +1708,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         return (
         <details
           key={cfg.key}
-          open={openKeys.has(cfg.key)}
+          open={isOpen}
           //onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
           style={{
             ["--vt-name" as any]: `accordion-panel${id}-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
@@ -1690,17 +1766,54 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               gap: 10px;
               background: ${ui.summaryBg};
               color: ${ui.summaryText};
+              list-style: none;
+              transition: background 180ms ease, color 180ms ease;
+
+              &::-webkit-details-marker {
+                display: none;
+              }
+
+              &:hover {
+                background: ${ui.summaryHoverBg};
+              }
             `}
           >
             <span className={css`display: flex; flex-direction: column; gap: 2px;`}>
               <span className={css`font-size: 14px;`}>{cfg.title}</span>
               {cfg.subtitle && (
-                <span className={css`font-size: 12px; font-weight: 500; opacity: 0.8;`}>
+                <span className={css`font-size: 12px; font-weight: 500; color: ${ui.summaryMetaText};`}>
                   {cfg.subtitle}
                 </span>
               )}
             </span>
-            <span className={css`font-size: 12px; opacity: 0.8;`}>Ver componente</span>
+            <span
+              className={css`
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                flex-shrink: 0;
+                font-size: 12px;
+                font-weight: 600;
+                color: ${ui.summaryMetaText};
+              `}
+            >
+              {isOpen ? "Cerrar" : "Mostrar"}
+              <span
+                className={css`
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  width: 24px;
+                  height: 24px;
+                  border-radius: 50%;
+                  border: 1px solid ${ui.summaryChevronBorder};
+                  background: ${ui.summaryChevronBg};
+                  color: ${ui.summaryText};
+                `}
+              >
+                <Icon name={isOpen ? "angle-up" : "angle-down"} size="md" />
+              </span>
+            </span>
           </summary>
 
           {visibleCharts.length > 1 && (
