@@ -79,6 +79,17 @@ type WidgetLifecycleContext = {
   };
 };
 
+const moveItem = <T,>(items: T[], fromIndex: number, toIndex: number): T[] => {
+  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= items.length || toIndex >= items.length) {
+    return items;
+  }
+
+  const next = [...items];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+};
+
 type AccordionConfig = {
   key: string;
   title: string;
@@ -919,6 +930,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   }, [localParsedConfig.error, remoteConfigError, remotePanelConfig]);
   const categories = panelConfig.categories ?? [];
   const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [sectionOrderByCategory, setSectionOrderByCategory] = useState<Record<string, string[]>>({});
   const [chartErrors, setChartErrors] = useState<Record<string, string>>({});
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
   const [activeCharts, setActiveCharts] = useState<Record<string, string>>(() => {
@@ -1060,9 +1072,47 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     () => categories.find((item) => item.key === selectedCategory) ?? categories[0],
     [categories, selectedCategory]
   );
-  const sections = selectedCategoryConfig?.sections ?? [];
+  const selectedCategoryKey = selectedCategoryConfig?.key ?? "";
+  const baseSections = selectedCategoryConfig?.sections ?? [];
+  const sections = useMemo(() => {
+    const preferredOrder = sectionOrderByCategory[selectedCategoryKey] ?? [];
+    if (preferredOrder.length === 0) {
+      return baseSections;
+    }
+
+    const sectionsMap = new Map(baseSections.map((section) => [section.key, section]));
+    const orderedSections = preferredOrder
+      .map((sectionKey) => sectionsMap.get(sectionKey))
+      .filter((section): section is AccordionConfig => Boolean(section));
+    const missingSections = baseSections.filter((section) => !preferredOrder.includes(section.key));
+    return [...orderedSections, ...missingSections];
+  }, [baseSections, sectionOrderByCategory, selectedCategoryKey]);
   const accordionLayoutMode = selectedCategoryConfig?.accordionLayoutMode ?? "vertical";
   const accordionColumns = selectedCategoryConfig?.accordionColumns ?? 1;
+
+  useEffect(() => {
+    if (!selectedCategoryKey) {
+      return;
+    }
+
+    const availableKeys = baseSections.map((section) => section.key);
+    setSectionOrderByCategory((prev) => {
+      const existingOrder = prev[selectedCategoryKey] ?? [];
+      const nextOrder = [
+        ...existingOrder.filter((sectionKey) => availableKeys.includes(sectionKey)),
+        ...availableKeys.filter((sectionKey) => !existingOrder.includes(sectionKey)),
+      ];
+
+      if (
+        existingOrder.length === nextOrder.length &&
+        existingOrder.every((sectionKey, index) => sectionKey === nextOrder[index])
+      ) {
+        return prev;
+      }
+
+      return { ...prev, [selectedCategoryKey]: nextOrder };
+    });
+  }, [baseSections, selectedCategoryKey]);
 
   useEffect(() => {
     Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
@@ -1072,17 +1122,39 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     Object.keys(widgetRuntimeRef.current).forEach((groupKey) => destroyWidgetRuntimeInternal(groupKey, true));
     widgetDomRefs.current = {};
     setLoadingCharts({});
-    const initialOpen = new Set<string>();
-    if (sections[0]?.key) {
-      initialOpen.add(sections[0].key);
-    }
-    setOpenKeys(initialOpen);
-    const initial: Record<string, string> = {};
-    sections.forEach((group) => {
-      initial[group.key] = group.charts[0]?.key ?? "";
+    setOpenKeys((prev) => {
+      const validSectionKeys = new Set(sections.map((group) => group.key));
+      const next = new Set([...prev].filter((key) => validSectionKeys.has(key)));
+      if (next.size === 0 && sections[0]?.key) {
+        next.add(sections[0].key);
+      }
+      return next;
     });
-    setActiveCharts(initial);
-    setHiddenCharts({});
+    setActiveCharts((prev) => {
+      const next: Record<string, string> = {};
+      sections.forEach((group) => {
+        const validChartKeys = new Set(group.charts.map((chart) => chart.key));
+        const previousChartKey = prev[group.key];
+        next[group.key] =
+          previousChartKey && validChartKeys.has(previousChartKey) ? previousChartKey : group.charts[0]?.key ?? "";
+      });
+      return next;
+    });
+    setHiddenCharts((prev) => {
+      const next: Record<string, Set<string>> = {};
+      sections.forEach((group) => {
+        const previousHidden = prev[group.key];
+        if (!previousHidden?.size) {
+          return;
+        }
+        const validChartKeys = new Set(group.charts.map((chart) => chart.key));
+        const filteredHidden = new Set([...previousHidden].filter((key) => validChartKeys.has(key)));
+        if (filteredHidden.size > 0) {
+          next[group.key] = filteredHidden;
+        }
+      });
+      return next;
+    });
   }, [destroyWidgetRuntimeInternal, sections]);
 
   useEffect(() => {
@@ -1822,6 +1894,38 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     [activeCharts, renderComponent, sections]
   );
 
+  const onMoveSection = useCallback(
+    (sectionKey: string, direction: "up" | "down") => {
+      if (!selectedCategoryKey) {
+        return;
+      }
+
+      const currentOrder = sections.map((section) => section.key);
+      const currentIndex = currentOrder.indexOf(sectionKey);
+      const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+      if (currentIndex === -1 || targetIndex < 0 || targetIndex >= currentOrder.length) {
+        return;
+      }
+
+      const applyMove = () => {
+        setSectionOrderByCategory((prev) => ({
+          ...prev,
+          [selectedCategoryKey]: moveItem(currentOrder, currentIndex, targetIndex),
+        }));
+      };
+
+      if (typeof document !== "undefined" && document.startViewTransition) {
+        document.startViewTransition(() => {
+          applyMove();
+          return new Promise((resolve) => setTimeout(resolve, 15));
+        });
+      } else {
+        applyMove();
+      }
+    },
+    [sections, selectedCategoryKey]
+  );
+
   const onSwitchChart = useCallback(
     (groupKey: string, chartKey: string) => {
       setActiveCharts((prev) => ({ ...prev, [groupKey]: chartKey }));
@@ -1967,8 +2071,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           align-items: start;
         `}
       >
-      {sections.map((cfg) => {
+      {sections.map((cfg, index) => {
         const isOpen = openKeys.has(cfg.key);
+        const canMoveUp = index > 0;
+        const canMoveDown = index < sections.length - 1;
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
         const fallbackKey = visibleCharts[0]?.key ?? "";
@@ -1982,7 +2088,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         <details
           key={cfg.key}
           open={isOpen}
-          //onToggle={(e) => onToggle(cfg.key, (e.currentTarget as HTMLDetailsElement).open)}
           style={{
             viewTransitionName: `accordion-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
           }}
@@ -2060,12 +2165,71 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                 display: inline-flex;
                 align-items: center;
                 gap: 8px;
+                flex-wrap: wrap;
                 flex-shrink: 0;
                 font-size: 12px;
                 font-weight: 600;
                 color: ${ui.summaryMetaText};
               `}
             >
+              <span
+                className={css`
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                `}
+              >
+                <button
+                  type="button"
+                  aria-label={`Subir ${cfg.title}`}
+                  disabled={!canMoveUp}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onMoveSection(cfg.key, "up");
+                  }}
+                  className={css`
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 999px;
+                    border: 1px solid ${ui.summaryChevronBorder};
+                    background: ${ui.summaryChevronBg};
+                    color: ${ui.summaryText};
+                    cursor: ${canMoveUp ? "pointer" : "not-allowed"};
+                    opacity: ${canMoveUp ? 1 : 0.45};
+                  `}
+                >
+                  <Icon name="arrow-up" size="sm" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Bajar ${cfg.title}`}
+                  disabled={!canMoveDown}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onMoveSection(cfg.key, "down");
+                  }}
+                  className={css`
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 999px;
+                    border: 1px solid ${ui.summaryChevronBorder};
+                    background: ${ui.summaryChevronBg};
+                    color: ${ui.summaryText};
+                    cursor: ${canMoveDown ? "pointer" : "not-allowed"};
+                    opacity: ${canMoveDown ? 1 : 0.45};
+                  `}
+                >
+                  <Icon name="arrow-down" size="sm" />
+                </button>
+              </span>
               {isOpen ? "Cerrar" : "Mostrar"}
               <span
                 className={css`
