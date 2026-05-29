@@ -9,7 +9,6 @@ import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
 
 const PLUGIN_ID = "dsknggrafana-deskoverplugin-panel";
-const ACCENT_RGB = "52, 222, 154";
 
 type ChartConfig = {
   key: string;
@@ -769,9 +768,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             toolbarBorder: "rgba(31, 45, 61, 0.12)",
             toolbarShadow: "rgba(18, 38, 63, 0.06)",
             textPrimary: "#1f2d3d",
-            chipActiveBorder: `rgb(${ACCENT_RGB})`,
-            chipActiveBg: `rgb(${ACCENT_RGB})`,
-            chipActiveText: "#083344",
+            chipActiveBorder: "rgb(45, 49, 59)",
+            chipActiveBg: "rgb(45, 49, 59)",
+            chipActiveText: "#ffffff",
             chipBorder: "rgba(31, 45, 61, 0.2)",
             chipBg: "#ffffff",
             chipText: "#1f2d3d",
@@ -782,10 +781,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardBg: "#ffffff",
             cardShadow1: "rgba(18, 38, 63, 0.08)",
             cardShadow2: "rgba(18, 38, 63, 0.06)",
-            summaryBg: `rgb(${ACCENT_RGB})`,
-            summaryHoverBg: `rgb(${ACCENT_RGB})`,
-            summaryText: "#083344",
-            summaryMetaText: "#0f4c3a",
+            summaryBg: "rgb(45, 49, 59)",
+            summaryHoverBg: "rgb(15, 23, 42)",
+            summaryText: "#ffffff",
+            summaryText2: "#000",
+            summaryMetaText: "rgba(255, 255, 255, 0.8)",
             summaryChevronBg: "#ffffff",
             summaryChevronBorder: "#ffffff",
             chipXActiveBg: "rgba(255, 255, 255, 0.2)",
@@ -802,9 +802,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             toolbarBorder: "rgba(229, 231, 235, 0.16)",
             toolbarShadow: "rgba(0, 0, 0, 0.45)",
             textPrimary: "#f3f4f6",
-            chipActiveBorder: `rgb(${ACCENT_RGB})`,
-            chipActiveBg: `rgb(${ACCENT_RGB})`,
-            chipActiveText: "#083344",
+            chipActiveBorder: "rgb(71, 85, 105)",
+            chipActiveBg: "rgb(71, 85, 105)",
+            chipActiveText: "#ffffff",
             chipBorder: "rgba(229, 231, 235, 0.26)",
             chipBg: "rgba(42, 46, 54, 0.95)",
             chipText: "#f3f4f6",
@@ -815,10 +815,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             cardBg: "#1f232b",
             cardShadow1: "rgba(0, 0, 0, 0.52)",
             cardShadow2: "rgba(0, 0, 0, 0.34)",
-            summaryBg: `rgb(${ACCENT_RGB})`,
-            summaryHoverBg: `rgb(${ACCENT_RGB})`,
-            summaryText: "#083344",
-            summaryMetaText: "#0f4c3a",
+            summaryBg: "rgb(71, 85, 105)",
+            summaryHoverBg: "rgb(51, 65, 85)",
+            summaryText: "#ffffff",
+            summaryText2: "#000",
+            summaryMetaText: "rgba(255, 255, 255, 0.8)",
             summaryChevronBg: "#ffffff",
             summaryChevronBorder: "#ffffff",
             chipXActiveBg: "rgba(17, 24, 39, 0.35)",
@@ -1808,7 +1809,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                   border-radius: 50%;
                   border: 1px solid ${ui.summaryChevronBorder};
                   background: ${ui.summaryChevronBg};
-                  color: ${ui.summaryText};
+                  color: ${ui.summaryText2};
                 `}
               >
                 <Icon name={isOpen ? "angle-up" : "angle-down"} size="md" />
