@@ -2255,7 +2255,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                     border-radius: 999px;
                     border: 1px solid ${ui.summaryChevronBorder};
                     background: ${ui.summaryChevronBg};
-                    color: ${ui.summaryText};
+                    color: ${ui.summaryText2};
                     cursor: ${canMoveUp ? "pointer" : "not-allowed"};
                     opacity: ${canMoveUp ? 1 : 0.45};
                   `}
@@ -2280,7 +2280,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                     border-radius: 999px;
                     border: 1px solid ${ui.summaryChevronBorder};
                     background: ${ui.summaryChevronBg};
-                    color: ${ui.summaryText};
+                    color: ${ui.summaryText2};
                     cursor: ${canMoveDown ? "pointer" : "not-allowed"};
                     opacity: ${canMoveDown ? 1 : 0.45};
                   `}
