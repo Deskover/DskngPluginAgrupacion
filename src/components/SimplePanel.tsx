@@ -94,6 +94,7 @@ type AccordionConfig = {
   title: string;
   subtitle?: string;
   charts: ChartConfig[];
+  pinned?: boolean;
 };
 
 type CategoryConfig = {
@@ -538,6 +539,7 @@ const normalizeSection = (raw: any, sectionIndex: number, categoryKey: string): 
     charts: Array.isArray(chartsRaw)
       ? chartsRaw.map((chart: any, chartIndex: number) => normalizeChart(chart, chartIndex, key))
       : [],
+    pinned: Boolean(raw.pinned ?? raw.fijado),
   };
 };
 
@@ -938,6 +940,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     const initial: Record<string, string> = {};
     return initial;
   });
+  const [pinnedSections, setPinnedSections] = useState<Set<string>>(() => new Set());
   const [hiddenCharts, setHiddenCharts] = useState<Record<string, Set<string>>>(() => ({}));
 
   const chartInstancesRef = useRef<Record<string, echarts.ECharts | null>>({});
@@ -1848,7 +1851,31 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     [disposeWidgetRuntime, getHtmlContent, renderChart, renderWidget]
   );
 
+  const onTogglePinSection = useCallback((sectionKey: string) => {
+    setPinnedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(sectionKey)) {
+        next.delete(sectionKey);
+      } else {
+        next.add(sectionKey);
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
+    // Re-render charts when pinned state changes, in case it affects layout or interaction
+    sections.forEach((group) => {
+      if (!openKeys.has(group.key)) {
+        return;
+      }
+      const activeKey = activeCharts[group.key] ?? group.charts[0]?.key;
+      const activeChart = group.charts.find((c) => c.key === activeKey);
+      if (!activeChart) return;
+      requestAnimationFrame(() => {
+        renderComponent(group.key, activeChart);
+      });
+    });
     if (sections.length === 0) {
       return;
     }
@@ -1864,7 +1891,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         renderComponent(group.key, activeChart);
       });
     });
-  }, [activeCharts, openKeys, renderComponent, sections]);
+  }, [activeCharts, openKeys, pinnedSections, renderComponent, sections]);
 
   const onToggle = useCallback(
     (key: string, open: boolean) => {
@@ -1932,10 +1959,52 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         return;
       }
 
+        // If the section to move is pinned, it cannot be moved.
+        if (pinnedSections.has(sectionKey)) {
+          return;
+        }
+
+        // Filter out pinned sections to get only movable sections and their keys
+        const movableSectionKeys = currentOrder.filter((key) => !pinnedSections.has(key));
+        const fromIndexInMovable = movableSectionKeys.indexOf(sectionKey);
+
+        if (fromIndexInMovable === -1) {
+          // Should not happen if sectionKey is not pinned
+          return;
+        }
+
+        let desiredTargetIndexInMovable = fromIndexInMovable;
+        if (direction === "up") {
+          desiredTargetIndexInMovable = Math.max(0, fromIndexInMovable - 1);
+        } else { // direction === "down"
+          desiredTargetIndexInMovable = Math.min(movableSectionKeys.length - 1, fromIndexInMovable + 1);
+        }
+
+        // If no effective move in the movable list, return
+        if (desiredTargetIndexInMovable === fromIndexInMovable) {
+          return;
+        }
+
+        // Perform the move on the movable sections
+        const newMovableOrder = moveItem(movableSectionKeys, fromIndexInMovable, desiredTargetIndexInMovable);
+
+        // Reconstruct the final order
+        const finalOrder: string[] = [];
+        let movableIndex = 0;
+        for (let i = 0; i < currentOrder.length; i++) {
+          const originalSectionKey = currentOrder[i];
+          if (pinnedSections.has(originalSectionKey)) {
+            finalOrder.push(originalSectionKey); // Pinned sections stay in their absolute position
+          } else {
+            finalOrder.push(newMovableOrder[movableIndex]); // Fill with next movable section
+            movableIndex++;
+          }
+        }
+
       const applyMove = () => {
         setSectionOrderByCategory((prev) => ({
           ...prev,
-          [selectedCategoryKey]: moveItem(currentOrder, currentIndex, targetIndex),
+            [selectedCategoryKey]: finalOrder,
         }));
       };
 
@@ -1948,7 +2017,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         applyMove();
       }
     },
-    [sections, selectedCategoryKey]
+      [sections, selectedCategoryKey, pinnedSections]
   );
 
   const onSwitchChart = useCallback(
@@ -2286,6 +2355,29 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                   `}
                 >
                   <Icon name="arrow-down" size="sm" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={pinnedSections.has(cfg.key) ? `Desfijar ${cfg.title}` : `Fijar ${cfg.title}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onTogglePinSection(cfg.key);
+                  }}
+                  className={css`
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 999px;
+                    border: 1px solid ${ui.summaryChevronBorder};
+                    background: ${pinnedSections.has(cfg.key) ? ui.infoBorder : ui.summaryChevronBg};
+                    color: ${pinnedSections.has(cfg.key) ? ui.chipActiveText : ui.summaryText2};
+                    cursor: pointer;
+                  `}
+                >
+                  <Icon name={pinnedSections.has(cfg.key) ? "lock" : "unlock"} size="sm" />
                 </button>
               </span>
               {isOpen ? "Cerrar" : "Mostrar"}
