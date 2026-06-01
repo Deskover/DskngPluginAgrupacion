@@ -2327,6 +2327,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                 >
                   <Icon name="arrow-down" size="sm" />
                 </button>
+                {/*
                 <button
                   type="button"
                   aria-label={pinnedSections.has(cfg.key) ? `Desfijar ${cfg.title}` : `Fijar ${cfg.title}`}
@@ -2350,6 +2351,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
                 >
                   <Icon name={pinnedSections.has(cfg.key) ? "lock" : "unlock"} size="sm" />
                 </button>
+                */}
               </span>
               {isOpen ? "Cerrar" : "Mostrar"}
               <span
