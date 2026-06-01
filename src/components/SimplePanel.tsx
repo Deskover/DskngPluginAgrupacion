@@ -1954,8 +1954,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
       const currentOrder = sections.map((section) => section.key);
       const currentIndex = currentOrder.indexOf(sectionKey);
-      const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-      if (currentIndex === -1 || targetIndex < 0 || targetIndex >= currentOrder.length) {
+      if (currentIndex === -1) {
         return;
       }
 
@@ -2009,9 +2008,20 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       };
 
       if (typeof document !== "undefined" && document.startViewTransition) {
-        document.startViewTransition(() => {
+        // Activamos la animación en el contenedor
+        if (wrapperRef.current) {
+          wrapperRef.current.classList.add("panel-is-transitioning");
+        }
+
+        const transition = document.startViewTransition(() => {
           applyMove();
           return new Promise((resolve) => setTimeout(resolve, 15));
+        });
+
+        transition.finished.finally(() => {
+          if (wrapperRef.current) {
+            wrapperRef.current.classList.remove("panel-is-transitioning");
+          }
         });
       } else {
         applyMove();
@@ -2093,8 +2103,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
         /* 2. View Transition API (aplicará solo a los elementos con nombre único) */
         ::view-transition-group(*) {
-          animation-duration: 0.2s;
-          animation-timing-function: ease-in-out;
+          animation-duration: 0.35s;
+          animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
         }
         
         /* 3. Fallback para navegadores sin View Transition */
