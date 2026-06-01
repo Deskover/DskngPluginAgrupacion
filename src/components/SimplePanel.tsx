@@ -5,6 +5,7 @@ import { Icon, useTheme2 } from '@grafana/ui';
 import { SimpleOptions } from 'types';
 import { css } from '@emotion/css';
 
+import { motion, LayoutGroup } from 'framer-motion';
 import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
 
@@ -1258,11 +1259,18 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       overflow-y: auto;
       overflow-x: hidden;
       padding: 12px;
+      isolation: isolate;
       background: linear-gradient(135deg, ${ui.wrapperBgStart}, ${ui.wrapperBgEnd});
       border-radius: 14px;
-      contain: paint;
+      /* Forzamos el recorte estricto y el aislamiento de capas */
+      contain: layout paint;
+      overflow-y: auto !important;
+
+      &.panel-is-transitioning {
+        view-transition-name: dsk-wrapper-${id};
+      }
     `,
-    [height, ui.wrapperBgEnd, ui.wrapperBgStart, width]
+    [height, ui.wrapperBgEnd, ui.wrapperBgStart, width, id]
   );
 
   const onToggleCategory = useCallback((category: string) => {
@@ -1907,28 +1915,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         });
       };
 
-      if (typeof document !== "undefined" && document.startViewTransition) {
-        
-        // 1. ENCENDEMOS LA ANIMACIÓN SOLO EN ESTE PANEL
-        if (wrapperRef.current) {
-          wrapperRef.current.classList.add("panel-is-transitioning");
-        }
-
-        const transition = document.startViewTransition(() => {
-          updateVisuals();
-          return new Promise((resolve) => setTimeout(resolve, 15));
-        });
-
-        // 2. APAGAMOS LA ANIMACIÓN AL TERMINAR EL EFECTO
-        transition.finished.finally(() => {
-          if (wrapperRef.current) {
-            wrapperRef.current.classList.remove("panel-is-transitioning");
-          }
-        });
-
-      } else {
-        updateVisuals();
-      }
+      /* Eliminamos la View Transition para el toggle. 
+         Al abrir/cerrar, usamos solo animación CSS local para que el contenido 
+         se mantenga estrictamente dentro de los límites del DOM y no sobresalga. */
+      updateVisuals();
 
       if (open) {
         // ... (El resto de tu lógica de renderComponent se queda exactamente igual) ...
@@ -2007,25 +1997,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         }));
       };
 
-      if (typeof document !== "undefined" && document.startViewTransition) {
-        // Activamos la animación en el contenedor
-        if (wrapperRef.current) {
-          wrapperRef.current.classList.add("panel-is-transitioning");
-        }
-
-        const transition = document.startViewTransition(() => {
-          applyMove();
-          return new Promise((resolve) => setTimeout(resolve, 15));
-        });
-
-        transition.finished.finally(() => {
-          if (wrapperRef.current) {
-            wrapperRef.current.classList.remove("panel-is-transitioning");
-          }
-        });
-      } else {
-        applyMove();
-      }
+      applyMove();
     },
       [sections, selectedCategoryKey, pinnedSections]
   );
@@ -2094,23 +2066,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   return (
     <div ref={wrapperRef} className={wrapperClass}>
       <style>{`
-        /* 1. APAGAR LA ANIMACIÓN GLOBAL (Evita que otros paneles de Grafana parpadeen) */
-        ::view-transition-group(root),
-        ::view-transition-old(root),
-        ::view-transition-new(root) {
-          animation: none !important;
-        }
-
-        /* 2. View Transition API (aplicará solo a los elementos con nombre único) */
-        ::view-transition-group(*) {
-          animation-duration: 0.35s;
-          animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        
-        /* 3. Fallback para navegadores sin View Transition */
-        details[open] summary ~ * {
-          animation: slideDownFade 0.1s ease-out forwards;
-        }
         @keyframes slideDownFade {
           from {
             opacity: 0;
@@ -2204,6 +2159,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           align-items: start;
         `}
       >
+      <LayoutGroup id={`panel-${id}`}>
       {sections.map((cfg, index) => {
         const isOpen = openKeys.has(cfg.key);
         const canMoveUp = index > 0;
@@ -2218,18 +2174,22 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         const htmlContent = errorKey ? htmlContents[errorKey] : undefined;
         const chartLoading = (errorKey ? Boolean(loadingCharts[errorKey]) : false) || isWaitingVars;
         return (
-        <details
+        <motion.div
+          layout="position"
           key={cfg.key}
-          open={isOpen}
-          style={{
-            ["--vt-name" as any]: `accordion-panel${id}-${cfg.key.replace(/[^a-zA-Z0-9]/g, "")}`
+          transition={{
+            type: 'spring',
+            stiffness: 300,
+            damping: 30,
+            opacity: { duration: 0.2 }
           }}
           className={css`
-            view-transition-name: none;
-            .panel-is-transitioning & {
-              view-transition-name: var(--vt-name);
-            }
             margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
+          `}
+        >
+        <details
+          open={isOpen}
+          className={css`
             border-radius: 12px;
             border: 1px solid ${ui.cardBorder};
             background: ${ui.cardBg};
@@ -2237,7 +2197,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               0 6px 18px ${ui.cardShadow1},
               0 2px 6px ${ui.cardShadow2};
             overflow: hidden;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            contain: paint;
+            transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
             
 
             &[open] {
@@ -2245,7 +2206,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             }
 
             &[open] summary ~ * {
-              animation: slideDownFade 0.1s ease-out forwards;
+              animation: slideDownFade 0.25s ease-out forwards;
             }
 
             @keyframes slideDownFade {
@@ -2627,8 +2588,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             </div>
           </div>
         </details>
+        </motion.div>
       );
       })}
+      </LayoutGroup>
       </div>
     </div>
   );
