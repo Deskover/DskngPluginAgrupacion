@@ -38,6 +38,7 @@ type ChartEntry = {
   rootIsArray: boolean;
 };
 
+
 const getCodeKey = (chart: any): CodeKey => {
   if (typeof chart?.code === 'string') return 'code';
   if (typeof chart?.codigo === 'string') return 'codigo';
