@@ -1129,25 +1129,27 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     widgetDomRefs.current = {};
     setLoadingCharts({});
     setOpenKeys((prev) => {
-      const validSectionKeys = new Set(sections.map((group) => group.key));
-      const next = new Set([...prev].filter((key) => validSectionKeys.has(key)));
-      if (next.size === 0 && sections[0]?.key) {
+      const next = new Set(prev);
+      const hasAnyCurrentOpen = sections.some((group) => next.has(group.key));
+      if (!hasAnyCurrentOpen && sections[0]?.key) {
         next.add(sections[0].key);
       }
       return next;
     });
     setActiveCharts((prev) => {
-      const next: Record<string, string> = {};
+      const next = { ...prev };
       sections.forEach((group) => {
-        const validChartKeys = new Set(group.charts.map((chart) => chart.key));
-        const previousChartKey = prev[group.key];
-        next[group.key] =
-          previousChartKey && validChartKeys.has(previousChartKey) ? previousChartKey : group.charts[0]?.key ?? "";
+        // Solo establecemos el valor inicial si la sección no tiene un estado previo.
+        // Eliminamos la validación de existencia aquí para evitar reseteos 
+        // cuando la configuración se recarga tras interactuar con otros paneles.
+        if (next[group.key] === undefined) {
+          next[group.key] = group.charts[0]?.key ?? "";
+        }
       });
       return next;
     });
     setHiddenCharts((prev) => {
-      const next: Record<string, Set<string>> = {};
+      const next = { ...prev };
       sections.forEach((group) => {
         const previousHidden = prev[group.key];
         if (!previousHidden?.size) {
