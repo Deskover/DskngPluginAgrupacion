@@ -2049,19 +2049,17 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   );
 
   const makeWidgetRef = useCallback(
-    (groupKey: string, chart: ChartConfig) => (node: HTMLDivElement | null) => {
-      if (chart.type !== "widget") {
-        return;
-      }
-      widgetDomRefs.current[groupKey] = node;
-      if (node) {
-        requestAnimationFrame(() => renderComponent(groupKey, chart));
-        return;
-      }
-      disposeWidgetRuntime(groupKey, false);
-    },
-    [disposeWidgetRuntime, renderComponent]
-  );
+  (groupKey: string, chart: ChartConfig) => (node: HTMLDivElement | null) => {
+    if (chart.type !== "widget") {
+      return;
+    }
+    widgetDomRefs.current[groupKey] = node;
+    if (node) {
+      requestAnimationFrame(() => renderComponent(groupKey, chart));
+    }
+  },
+  [renderComponent] 
+);
 
   return (
     <div ref={wrapperRef} className={wrapperClass}>
