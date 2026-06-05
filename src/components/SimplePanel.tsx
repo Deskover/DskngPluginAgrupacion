@@ -958,6 +958,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const scopedVarsVersionRef = useRef(0);
   const [htmlContents, setHtmlContents] = useState<Record<string, HtmlContent>>({});
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const contextRefs = useRef({ effectiveScopedVars, width, height, id });
+
+  useEffect(() => {
+    contextRefs.current = { effectiveScopedVars, width, height, id };
+  }, [effectiveScopedVars, width, height, id]);
 
   const destroyWidgetRuntimeInternal = useCallback(
     (groupKey: string, clearMarkup = false) => {
@@ -1018,7 +1023,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       }
       widgetRuntimeRef.current[groupKey] = null;
     },
-    [effectiveScopedVars, height, id, width]
+    //[effectiveScopedVars, height, id, width]
+    []
   );
 
   useEffect(() => {
@@ -1184,7 +1190,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     attachedChartEventsRef.current = {};
     htmlCacheRef.current = {};
     htmlInFlightRef.current = {};
-    Object.keys(widgetRuntimeRef.current).forEach((groupKey) => destroyWidgetRuntimeInternal(groupKey, false));
+    //Object.keys(widgetRuntimeRef.current).forEach((groupKey) => destroyWidgetRuntimeInternal(groupKey, false));
     setHtmlContents({});
   }, [destroyWidgetRuntimeInternal, stabilizedVarsFingerprint]);
 
