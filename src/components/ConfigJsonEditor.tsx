@@ -8,6 +8,7 @@ import estree from 'prettier/plugins/estree';
 import htmlPlugin from 'prettier/plugins/html';
 import postcss from 'prettier/plugins/postcss';
 import { SimpleOptions } from 'types';
+import { resolveJwtToken, withAuthTokenHeader } from '../utils/jwtToken';
 
 type Props = PanelOptionsEditorProps<string>;
 
@@ -264,7 +265,12 @@ export const ConfigJsonEditor: React.FC<Props> = ({ value, onChange, context }) 
         const endpointUrl = context?.replaceVariables
           ? context.replaceVariables(configJsonEndpoint)
           : configJsonEndpoint;
-        const response = await fetch(endpointUrl);
+        const jwtToken = resolveJwtToken({
+          search: typeof window === 'undefined' ? '' : window.location.search,
+        });
+        const response = await fetch(endpointUrl, {
+          headers: withAuthTokenHeader(undefined, jwtToken),
+        });
         if (!response.ok) {
           throw new Error(`Error HTTP ${response.status} al consultar ${endpointUrl}`);
         }

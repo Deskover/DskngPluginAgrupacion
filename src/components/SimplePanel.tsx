@@ -4,8 +4,7 @@ import { getTemplateSrv, locationService } from '@grafana/runtime';
 import { Icon, useTheme2 } from '@grafana/ui';
 import { SimpleOptions } from 'types';
 import { css } from '@emotion/css';
-
-import { motion, LayoutGroup } from 'framer-motion';
+import { resolveJwtToken, withAuthTokenHeader } from '../utils/jwtToken';
 import * as echarts from "echarts";
 interface Props extends PanelProps<SimpleOptions> { }
 
@@ -904,6 +903,10 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     () => mergeScopedVars(data?.request?.scopedVars, urlSearch),
     [data?.request?.scopedVars, urlSearch]
   );
+  const jwtToken = useMemo(
+    () => resolveJwtToken({ scopedVars: effectiveScopedVars, search: urlSearch }),
+    [effectiveScopedVars, urlSearch]
+  );
   const scopedVarsKey = useMemo(() => {
     try {
       return JSON.stringify(effectiveScopedVars);
@@ -941,7 +944,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     const initial: Record<string, string> = {};
     return initial;
   });
-  const [pinnedSections, setPinnedSections] = useState<Set<string>>(() => new Set());
+  const [pinnedSections] = useState<Set<string>>(() => new Set());
   const [hiddenCharts, setHiddenCharts] = useState<Record<string, Set<string>>>(() => ({}));
 
   const chartInstancesRef = useRef<Record<string, echarts.ECharts | null>>({});
@@ -1208,7 +1211,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         setIsRemoteConfigLoading(true);
         setRemoteConfigError(null);
         const endpointUrl = replaceVars(configEndpoint, effectiveScopedVars);
-        const response = await fetch(endpointUrl);
+        const response = await fetch(endpointUrl, {
+          headers: withAuthTokenHeader(undefined, jwtToken),
+        });
         if (!response.ok) {
           throw new Error(`Error HTTP ${response.status} al consultar ${endpointUrl}`);
         }
@@ -1237,7 +1242,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     return () => {
       isCancelled = true;
     };
-  }, [configEndpoint, effectiveScopedVars, stabilizedVarsFingerprint]);
+  }, [configEndpoint, effectiveScopedVars, jwtToken, stabilizedVarsFingerprint]);
 
   const wrapperClass = useMemo(
     () => css`
@@ -1420,7 +1425,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     const resolvedHeaders = endpoint.headers ? deepReplace(endpoint.headers, scopedVars) : undefined;
     const resolvedBody = endpoint.body ? deepReplace(endpoint.body, scopedVars, "json") : undefined;
     const method = (endpoint.method ?? "GET").toUpperCase() as "GET" | "POST";
-    const headers = resolvedHeaders ? { ...resolvedHeaders } : {};
+    const headers = withAuthTokenHeader(resolvedHeaders ? { ...resolvedHeaders } : undefined, jwtToken) ?? {};
     const init: RequestInit = { method };
     if (method === "POST") {
       init.body = JSON.stringify(resolvedBody ?? {});
@@ -1440,7 +1445,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       return response.json();
     }
     return response.text();
-  }, [data?.series, effectiveScopedVars, stabilizedVarsFingerprint]);
+  }, [data?.series, effectiveScopedVars, jwtToken, stabilizedVarsFingerprint]);
 
   const buildOptionFromCode = useCallback(
     (groupKey: string, cacheKey: string, code: string, payload: unknown, vars: Record<string, unknown>) => {
@@ -1867,18 +1872,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     [disposeWidgetRuntime, getHtmlContent, renderChart, renderWidget]
   );
 
-  const onTogglePinSection = useCallback((sectionKey: string) => {
-    setPinnedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(sectionKey)) {
-        next.delete(sectionKey);
-      } else {
-        next.add(sectionKey);
-      }
-      return next;
-    });
-  }, []);
-
   useEffect(() => {
     // Re-render charts when pinned state changes, in case it affects layout or interaction
     sections.forEach((group) => {
@@ -2165,7 +2158,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           align-items: start;
         `}
       >
-      <LayoutGroup id={`panel-${id}`}>
       {sections.map((cfg, index) => {
         const isOpen = openKeys.has(cfg.key);
         const canMoveUp = index > 0;
@@ -2180,15 +2172,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         const htmlContent = errorKey ? htmlContents[errorKey] : undefined;
         const chartLoading = (errorKey ? Boolean(loadingCharts[errorKey]) : false) || isWaitingVars;
         return (
-        <motion.div
-          layout="position"
+        <div
           key={cfg.key}
-          transition={{
-            type: 'spring',
-            stiffness: 300,
-            damping: 30,
-            opacity: { duration: 0.2 }
-          }}
           className={css`
             margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
           `}
@@ -2596,10 +2581,9 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
             </div>
           </div>
         </details>
-        </motion.div>
+        </div>
       );
       })}
-      </LayoutGroup>
       </div>
     </div>
   );
