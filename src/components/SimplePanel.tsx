@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PanelProps } from '@grafana/data';
 import { getTemplateSrv, locationService } from '@grafana/runtime';
 import { Icon, useTheme2 } from '@grafana/ui';
@@ -946,6 +946,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   });
   const [pinnedSections] = useState<Set<string>>(() => new Set());
   const [hiddenCharts, setHiddenCharts] = useState<Record<string, Set<string>>>(() => ({}));
+  const [draggedSectionKey, setDraggedSectionKey] = useState<string | null>(null);
+  const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
 
   const chartInstancesRef = useRef<Record<string, echarts.ECharts | null>>({});
   const domRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -961,6 +963,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   const scopedVarsVersionRef = useRef(0);
   const [htmlContents, setHtmlContents] = useState<Record<string, HtmlContent>>({});
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const sectionContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const previousSectionRectsRef = useRef<Record<string, DOMRect>>({});
   const contextRefs = useRef({ effectiveScopedVars, width, height, id });
 
   useEffect(() => {
@@ -1128,6 +1132,55 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       return { ...prev, [selectedCategoryKey]: nextOrder };
     });
   }, [baseSections, selectedCategoryKey]);
+
+  useLayoutEffect(() => {
+    const nextRects: Record<string, DOMRect> = {};
+
+    sections.forEach((section) => {
+      const node = sectionContainerRefs.current[section.key];
+      if (!node) {
+        return;
+      }
+
+      nextRects[section.key] = node.getBoundingClientRect();
+    });
+
+    sections.forEach((section) => {
+      const node = sectionContainerRefs.current[section.key];
+      const previousRect = previousSectionRectsRef.current[section.key];
+      const nextRect = nextRects[section.key];
+
+      if (!node || !previousRect || !nextRect) {
+        return;
+      }
+
+      const deltaX = previousRect.left - nextRect.left;
+      const deltaY = previousRect.top - nextRect.top;
+
+      if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
+        return;
+      }
+
+      node.animate(
+        [
+          {
+            transform: `translate(${deltaX}px, ${deltaY}px) scale(0.985)`,
+            filter: "brightness(1.05)",
+          },
+          {
+            transform: "translate(0, 0) scale(1)",
+            filter: "brightness(1)",
+          },
+        ],
+        {
+          duration: 320,
+          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        }
+      );
+    });
+
+    previousSectionRectsRef.current = nextRects;
+  }, [sections]);
 
   useEffect(() => {
     Object.values(chartInstancesRef.current).forEach((chart) => chart?.dispose());
@@ -1937,71 +1990,108 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     [activeCharts, renderComponent, sections]
   );
 
-  const onMoveSection = useCallback(
-    (sectionKey: string, direction: "up" | "down") => {
+  const reorderSections = useCallback(
+    (sectionKey: string, targetSectionKey: string) => {
       if (!selectedCategoryKey) {
         return;
       }
 
-      const currentOrder = sections.map((section) => section.key);
-      const currentIndex = currentOrder.indexOf(sectionKey);
-      if (currentIndex === -1) {
+      if (sectionKey === targetSectionKey) {
         return;
       }
 
-        // If the section to move is pinned, it cannot be moved.
-        if (pinnedSections.has(sectionKey)) {
-          return;
+      const currentOrder = sections.map((section) => section.key);
+      if (!currentOrder.includes(sectionKey) || !currentOrder.includes(targetSectionKey)) {
+        return;
+      }
+
+      if (pinnedSections.has(sectionKey) || pinnedSections.has(targetSectionKey)) {
+        return;
+      }
+
+      const movableSectionKeys = currentOrder.filter((key) => !pinnedSections.has(key));
+      const fromIndexInMovable = movableSectionKeys.indexOf(sectionKey);
+      const targetIndexInMovable = movableSectionKeys.indexOf(targetSectionKey);
+
+      if (fromIndexInMovable === -1 || targetIndexInMovable === -1 || fromIndexInMovable === targetIndexInMovable) {
+        return;
+      }
+
+      const newMovableOrder = moveItem(movableSectionKeys, fromIndexInMovable, targetIndexInMovable);
+
+      const finalOrder: string[] = [];
+      let movableIndex = 0;
+      for (let i = 0; i < currentOrder.length; i++) {
+        const originalSectionKey = currentOrder[i];
+        if (pinnedSections.has(originalSectionKey)) {
+          finalOrder.push(originalSectionKey);
+        } else {
+          finalOrder.push(newMovableOrder[movableIndex]);
+          movableIndex++;
         }
-
-        // Filter out pinned sections to get only movable sections and their keys
-        const movableSectionKeys = currentOrder.filter((key) => !pinnedSections.has(key));
-        const fromIndexInMovable = movableSectionKeys.indexOf(sectionKey);
-
-        if (fromIndexInMovable === -1) {
-          // Should not happen if sectionKey is not pinned
-          return;
-        }
-
-        let desiredTargetIndexInMovable = fromIndexInMovable;
-        if (direction === "up") {
-          desiredTargetIndexInMovable = Math.max(0, fromIndexInMovable - 1);
-        } else { // direction === "down"
-          desiredTargetIndexInMovable = Math.min(movableSectionKeys.length - 1, fromIndexInMovable + 1);
-        }
-
-        // If no effective move in the movable list, return
-        if (desiredTargetIndexInMovable === fromIndexInMovable) {
-          return;
-        }
-
-        // Perform the move on the movable sections
-        const newMovableOrder = moveItem(movableSectionKeys, fromIndexInMovable, desiredTargetIndexInMovable);
-
-        // Reconstruct the final order
-        const finalOrder: string[] = [];
-        let movableIndex = 0;
-        for (let i = 0; i < currentOrder.length; i++) {
-          const originalSectionKey = currentOrder[i];
-          if (pinnedSections.has(originalSectionKey)) {
-            finalOrder.push(originalSectionKey); // Pinned sections stay in their absolute position
-          } else {
-            finalOrder.push(newMovableOrder[movableIndex]); // Fill with next movable section
-            movableIndex++;
-          }
-        }
+      }
 
       const applyMove = () => {
         setSectionOrderByCategory((prev) => ({
           ...prev,
-            [selectedCategoryKey]: finalOrder,
+          [selectedCategoryKey]: finalOrder,
         }));
       };
 
       applyMove();
     },
-      [sections, selectedCategoryKey, pinnedSections]
+    [sections, selectedCategoryKey, pinnedSections]
   );
+
+  const onSectionDragStart = useCallback(
+    (event: React.DragEvent<HTMLButtonElement>, sectionKey: string) => {
+      if (pinnedSections.has(sectionKey)) {
+        event.preventDefault();
+        return;
+      }
+
+      setDraggedSectionKey(sectionKey);
+      setDragOverSectionKey(sectionKey);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", sectionKey);
+    },
+    [pinnedSections]
+  );
+
+  const onSectionDragOver = useCallback(
+    (event: React.DragEvent<HTMLElement>, sectionKey: string) => {
+      if (!draggedSectionKey || draggedSectionKey === sectionKey || pinnedSections.has(sectionKey)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      if (dragOverSectionKey !== sectionKey) {
+        setDragOverSectionKey(sectionKey);
+      }
+    },
+    [dragOverSectionKey, draggedSectionKey, pinnedSections]
+  );
+
+  const onSectionDrop = useCallback(
+    (event: React.DragEvent<HTMLElement>, targetSectionKey: string) => {
+      event.preventDefault();
+      const sourceSectionKey = draggedSectionKey ?? event.dataTransfer.getData("text/plain");
+
+      if (sourceSectionKey) {
+        reorderSections(sourceSectionKey, targetSectionKey);
+      }
+
+      setDraggedSectionKey(null);
+      setDragOverSectionKey(null);
+    },
+    [draggedSectionKey, reorderSections]
+  );
+
+  const onSectionDragEnd = useCallback(() => {
+    setDraggedSectionKey(null);
+    setDragOverSectionKey(null);
+  }, []);
 
   const onSwitchChart = useCallback(
     (groupKey: string, chartKey: string) => {
@@ -2158,10 +2248,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
           align-items: start;
         `}
       >
-      {sections.map((cfg, index) => {
+      {sections.map((cfg) => {
         const isOpen = openKeys.has(cfg.key);
-        const canMoveUp = index > 0;
-        const canMoveDown = index < sections.length - 1;
+        const isPinned = pinnedSections.has(cfg.key);
+        const isDragged = draggedSectionKey === cfg.key;
+        const isDropTarget = dragOverSectionKey === cfg.key && draggedSectionKey !== cfg.key;
         const hidden = hiddenCharts[cfg.key] ?? new Set<string>();
         const visibleCharts = cfg.charts.filter((c) => !hidden.has(c.key));
         const fallbackKey = visibleCharts[0]?.key ?? "";
@@ -2174,8 +2265,14 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
         return (
         <div
           key={cfg.key}
+          ref={(node) => {
+            sectionContainerRefs.current[cfg.key] = node;
+          }}
+          onDragOver={(event) => onSectionDragOver(event, cfg.key)}
+          onDrop={(event) => onSectionDrop(event, cfg.key)}
           className={css`
             margin-bottom: ${accordionLayoutMode === "horizontal" ? "0" : "12px"};
+            will-change: transform;
           `}
         >
         <details
@@ -2189,8 +2286,14 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               0 2px 6px ${ui.cardShadow2};
             overflow: hidden;
             contain: paint;
-            transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
-            
+            transition: border-color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.2s, opacity 0.2s;
+            border-color: ${isDropTarget ? ui.infoBorder : ui.cardBorder};
+            box-shadow:
+              ${isDropTarget ? `0 0 0 2px ${ui.infoBorder},` : ""}
+              0 6px 18px ${ui.cardShadow1},
+              0 2px 6px ${ui.cardShadow2};
+            opacity: ${isDragged ? 0.7 : 1};
+            transform: ${isDropTarget ? "translateY(-2px)" : "none"};
 
             &[open] {
               border-color: ${ui.infoBorder};
@@ -2270,53 +2373,48 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
               >
                 <button
                   type="button"
-                  aria-label={`Subir ${cfg.title}`}
-                  disabled={!canMoveUp}
+                  draggable={!isPinned}
+                  aria-label={`Arrastrar ${cfg.title}`}
+                  title={isPinned ? `${cfg.title} esta fijado` : `Arrastrar ${cfg.title}`}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    onMoveSection(cfg.key, "up");
                   }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onDragStart={(event) => onSectionDragStart(event, cfg.key)}
+                  onDragEnd={onSectionDragEnd}
                   className={css`
                     display: inline-flex;
                     align-items: center;
                     justify-content: center;
-                    width: 28px;
-                    height: 28px;
+                    width: 30px;
+                    height: 30px;
                     border-radius: 999px;
                     border: 1px solid ${ui.summaryChevronBorder};
                     background: ${ui.summaryChevronBg};
                     color: ${ui.summaryText2};
-                    cursor: ${canMoveUp ? "pointer" : "not-allowed"};
-                    opacity: ${canMoveUp ? 1 : 0.45};
+                    cursor: ${isPinned ? "not-allowed" : isDragged ? "grabbing" : "grab"};
+                    opacity: ${isPinned ? 0.45 : 1};
                   `}
                 >
-                  <Icon name="arrow-up" size="sm" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Bajar ${cfg.title}`}
-                  disabled={!canMoveDown}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onMoveSection(cfg.key, "down");
-                  }}
-                  className={css`
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    width: 28px;
-                    height: 28px;
-                    border-radius: 999px;
-                    border: 1px solid ${ui.summaryChevronBorder};
-                    background: ${ui.summaryChevronBg};
-                    color: ${ui.summaryText2};
-                    cursor: ${canMoveDown ? "pointer" : "not-allowed"};
-                    opacity: ${canMoveDown ? 1 : 0.45};
-                  `}
-                >
-                  <Icon name="arrow-down" size="sm" />
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className={css`
+                      display: block;
+                      width: 16px;
+                      height: 16px;
+                    `}
+                  >
+                    <path
+                      d="M12 3 L12 21 M3 12 L21 12 M12 3 L8.5 6.5 M12 3 L15.5 6.5 M12 21 L8.5 17.5 M12 21 L15.5 17.5 M3 12 L6.5 8.5 M3 12 L6.5 15.5 M21 12 L17.5 8.5 M21 12 L17.5 15.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
                 </button>
                 {/*
                 <button
