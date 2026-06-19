@@ -716,36 +716,40 @@ const normalizeJsonValue = (value: any): any => {
   return value;
 };
 
-const deepReplace = (value: any, scopedVars?: Record<string, any>, format?: string): any => {
+const deepReplace = (value: any, scopedVars?: Record<string, any>): any => {
   if (typeof value === "string") {
-    const replaced = replaceVars(value, scopedVars, format);
-    if (format === "json" && typeof replaced === "string") {
-      const trimmed = replaced.trim();
-      if (trimmed === "$__all") {
-        return resolveAllTokenFromTemplate(value, scopedVars);
-      }
+    // 1. Detectamos TU bandera: ¿El usuario escribió explícitamente :json} ?
+    const isJsonFlagged = value.includes(":json}");
+
+    // 2. Dejamos que Grafana interpole la variable (ej. convierte ${Partidos:json} a '["pvem","pt"]')
+    const replaced = replaceVars(value, scopedVars);
+
+    // 3. Si detectamos la bandera, forzamos su conversión a un Arreglo/Objeto real
+    if (isJsonFlagged) {
       try {
-        const parsed = normalizeJsonValue(JSON.parse(replaced));
-        if (containsAllLikeToken(parsed)) {
-          return resolveAllTokenFromTemplate(value, scopedVars);
-        }
-        return parsed;
-      } catch {
-        return replaced;
+        return JSON.parse(replaced); // Convierte el string mágico en un arreglo puro de Javascript
+      } catch (e) {
+        console.error("Error al convertir la variable con bandera :json", replaced);
+        return replaced; // Fallback por si la variable estaba vacía o mal formada
       }
     }
+
+    // Si no tiene la bandera, se queda como texto normal
     return replaced;
   }
+  
   if (Array.isArray(value)) {
-    return value.map((item) => deepReplace(item, scopedVars, format));
+    return value.map((item) => deepReplace(item, scopedVars));
   }
+  
   if (value && typeof value === "object") {
     const next: Record<string, any> = {};
     Object.entries(value).forEach(([key, val]) => {
-      next[key] = deepReplace(val, scopedVars, format);
+      next[key] = deepReplace(val, scopedVars);
     });
     return next;
   }
+  
   return value;
 };
 
@@ -900,8 +904,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
     [grafanaTheme, isLightTheme]
   );
   const effectiveScopedVars = useMemo(
-    () => mergeScopedVars(data?.request?.scopedVars, urlSearch),
-    [data?.request?.scopedVars, urlSearch]
+    () => data?.request?.scopedVars ?? {},
+    [data?.request?.scopedVars]
   );
   const jwtToken = useMemo(
     () => resolveJwtToken({ scopedVars: effectiveScopedVars, search: urlSearch }),
@@ -1423,7 +1427,7 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
 
     const resolvedUrl = buildUrl(endpoint, scopedVars);
     const resolvedHeaders = endpoint.headers ? deepReplace(endpoint.headers, scopedVars) : undefined;
-    const resolvedBody = endpoint.body ? deepReplace(endpoint.body, scopedVars, "json") : undefined;
+    const resolvedBody = endpoint.body ? deepReplace(endpoint.body, scopedVars) : undefined;
     const method = (endpoint.method ?? "GET").toUpperCase() as "GET" | "POST";
     const headers = withAuthTokenHeader(resolvedHeaders ? { ...resolvedHeaders } : undefined, jwtToken) ?? {};
     const init: RequestInit = { method };
