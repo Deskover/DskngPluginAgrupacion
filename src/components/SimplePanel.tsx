@@ -1930,18 +1930,6 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
   );
 
   useEffect(() => {
-    // Re-render charts when pinned state changes, in case it affects layout or interaction
-    sections.forEach((group) => {
-      if (!openKeys.has(group.key)) {
-        return;
-      }
-      const activeKey = activeCharts[group.key] ?? group.charts[0]?.key;
-      const activeChart = group.charts.find((c) => c.key === activeKey);
-      if (!activeChart) return;
-      requestAnimationFrame(() => {
-        renderComponent(group.key, activeChart);
-      });
-    });
     if (sections.length === 0) {
       return;
     }
@@ -2137,10 +2125,11 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       }
       if (node) {
         domRefs.current[groupKey] = node;
-        requestAnimationFrame(() => renderComponent(groupKey, chart));
+        return;
       }
+      domRefs.current[groupKey] = null;
     },
-    [renderComponent]
+    []
   );
 
   const makeWidgetRef = useCallback(
@@ -2149,11 +2138,8 @@ export const SimplePanel: React.FC<Props> = ({ options, data, width, height, fie
       return;
     }
     widgetDomRefs.current[groupKey] = node;
-    if (node) {
-      requestAnimationFrame(() => renderComponent(groupKey, chart));
-    }
   },
-  [renderComponent] 
+  [] 
 );
 
   return (
